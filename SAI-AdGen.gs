@@ -1,4 +1,4 @@
-// AICU-AdGenerator SAI-AdGen.gs
+// AICU-AdGenerator SAI-AdGen.gs https://j.aicu.ai/SAIAD
 // 2024/6/22 Coded by Akihiko SHIRAI aki@aicu.ai 
 
 const defaultPrompt = 'urban tokyo bayfront skyline residences ad luxury super rich visual';
@@ -42,8 +42,10 @@ function onOpen() {
 function setAPIkey() {
   var ui = SlidesApp.getUi();
   var response = ui.prompt(
-    '[S.] Stability.ai API Key Required\n',
-    'This program requires a Stability.ai API key to generate images. ' +
+    '[S.] Stability AI Platform API Key Required\n',
+    'このツールでは、画像を生成するために Stability AI プラットフォームの APIキー が必要です。\n' +
+    'お持ちでない場合は、https://platform.stability.ai/account/keys でAPIキーを取得してください。\n' +
+    'This program requires a Stability.ai API key to generate images. \n' +
     'If you do not have one, please visit https://platform.stability.ai/account/keys to obtain an API key.',
     ui.ButtonSet.OK_CANCEL
   );
@@ -175,12 +177,12 @@ function addSlidesByAllStyles() {
   Logger.log('スライドの作成が完了しました。');
 }
 
-// スライドに背景画像を追加した後、第1ページの「Prompt=」や「NP=」で始まらないテキストオブジェクトをコピーします。
+// スライドに背景画像を追加した後、第1ページの「Prompt=」や「NP=」、「https://」で始まらないテキストオブジェクトをコピーします。
 function locateTextObjects(slide) {
   var firstSlide = SlidesApp.getActivePresentation().getSlides()[0];
   var shapesToCopy = firstSlide.getShapes().filter(function(shape) {
     var text = shape.getText().asString().trim();
-    return !(text.startsWith("Prompt=") || text.startsWith("NP="));
+    return !(text.startsWith("Prompt=") || text.startsWith("NP=") || text.startsWith("https://"));
   });
 
   shapesToCopy.forEach(function(shape) {
