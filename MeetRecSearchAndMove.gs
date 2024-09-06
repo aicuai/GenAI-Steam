@@ -80,12 +80,20 @@ function SearchAndMove() {
         
         if (fileURLs.length > 0) {
           const processedFiles = [];
+          const processedURLs = new Set(); // 追加: 処理済みURLを追跡するためのSet
           let allFilesProcessedSuccessfully = true;
 
           for (let fileURL of fileURLs) {
+            // 追加: URLが既に処理済みの場合はスキップ
+            if (processedURLs.has(fileURL)) {
+              console.log(`Skipping duplicate URL: ${fileURL}`);
+              continue;
+            }
+
             const result = processFile(fileURL, subject, meetingName, renameTo, serial, moveToDriveId, moveToDriveURL, searchAndMoveSheet, moveLogSheet, i, checkColumnIndex);
             if (result.success) {
               processedFiles.push(result.fileInfo);
+              processedURLs.add(fileURL); // 追加: 処理済みURLをSetに追加
             } else {
               allFilesProcessedSuccessfully = false;
             }
