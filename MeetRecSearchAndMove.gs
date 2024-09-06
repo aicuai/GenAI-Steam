@@ -2,6 +2,7 @@
  * Meet Rec Manager
  * MeetRecSearchAndMove.gs
  * Coded by Akihiko Shirai
+ * https://github.com/aicuai/GenAI-Steam/blob/main/MeetRecSearchAndMove.gs
  */
 
 // 必要なスコープを明示的に要求
@@ -17,7 +18,10 @@ function getOAuthToken() {
  * - 未読メールを検索し、ファイルリンクを抽出
  * - ファイルを移動し、名前を変更
  * - 処理結果をログに記録し、Slack通知とメール通知を送信
+ * - メールの検索を古い順に処理するように変更します。
+ * - ファイルの処理に成功したら、スクリプトを終了するように修正します。
  */
+
 function SearchAndMove() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet();
   const searchAndMoveSheet = sheet.getSheetByName('SearchAndMove');
@@ -29,21 +33,11 @@ function SearchAndMove() {
   const serialColumnIndex = headers.indexOf('Serial') + 1;
   const emailToColumnIndex = headers.indexOf('EmailTo') + 1;
   const slackToColumnIndex = headers.indexOf('SlackTo') + 1;
-  
-  let MeetingName = ""
-  let movedFiles = [];
-  let destinationFolderUrl = '';
-  let emailTo = '';
-  let slackTo = '';
 
   for (let i = 0; i < searchData.length; i++) {
     const row = searchData[i];
     const [meetingName, renameTo, serial, moveToDriveURL, emailToAddress, slackToEndpoint] = row;
     console.log(`Processing row ${i + 2}: MeetingName=${meetingName}, RenameTo=${renameTo}, Serial=${serial}, MoveToDriveURL=${moveToDriveURL}, EmailTo=${emailToAddress}, SlackTo=${slackToEndpoint}`);
-    
-    MeetingName = renameTo;
-    emailTo = emailToAddress; // Store email address(es) for later use
-    slackTo = slackToEndpoint; //個別Slack通知
     
     const moveToDriveId = getDriveIdFromUrl(moveToDriveURL);
 
@@ -57,7 +51,6 @@ function SearchAndMove() {
     try {
       const destinationFolder = DriveApp.getFolderById(moveToDriveId);
       console.log("Destination folder name: " + destinationFolder.getName());
-      destinationFolderUrl = moveToDriveURL;
     } catch (folderError) {
       console.error("Error accessing destination folder: " + folderError.toString());
       searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue("Error: Cannot access destination folder").setBackground('#FFB6C1');
@@ -65,7 +58,8 @@ function SearchAndMove() {
     }
     
     const query = `is:unread subject:"${meetingName}"`;
-    const threads = GmailApp.search(query);
+    const threads = GmailApp.search(query, 0, 10); // Limit to 10 threads for safety
+    threads.reverse(); // Process oldest first
     
     console.log("Search Gmail for: " + meetingName);
     for (let thread of threads) {
@@ -75,7 +69,6 @@ function SearchAndMove() {
         const body = message.getBody();
         
         console.log("Processing email: " + subject);
-        console.log("Email body: " + body);
 
         // Check if this is a "processing" email and delete it
         if (body.includes("The recording of the meeting might still be processing. You'll be notified when it's ready.")) {
@@ -90,17 +83,29 @@ function SearchAndMove() {
           for (let fileURL of fileURLs) {
             const result = processFile(fileURL, subject, meetingName, renameTo, serial, moveToDriveId, moveToDriveURL, searchAndMoveSheet, moveLogSheet, i, checkColumnIndex);
             if (result.success) {
-              movedFiles.push(result.fileInfo);
               // Update serial number if it was used
               if (serial) {
                 const newSerial = parseInt(serial) + 1;
                 searchAndMoveSheet.getRange(i + 2, serialColumnIndex).setValue(newSerial);
               }
+              
+              // Mark the email as read after processing
+              message.markRead();
+
+              // Debug logging
+              console.log("Processed file info:", JSON.stringify(result.fileInfo));
+              console.log("Meeting name:", meetingName);
+              console.log("Move to Drive URL:", moveToDriveURL);
+
+              // Send notifications for this processed file
+              sendSlackNotification(slackToEndpoint, meetingName, result.fileInfo, moveToDriveURL);
+              sendEmailNotification(meetingName, result.fileInfo, moveToDriveURL, emailToAddress);
+
+              // Exit the script after successful processing of one file
+              console.log("Successfully processed one file. Exiting script.");
+              return;
             }
           }
-          
-          // Mark the email as read after processing
-          message.markRead();
         } else {
           const errorMessage = 'Error: No file links found in email';
           console.log('Debug: ' + errorMessage);
@@ -115,12 +120,6 @@ function SearchAndMove() {
       console.log(message + ' for: ' + meetingName);
       searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue(message).setBackground('#FFB6C1');
     }
-  }
-
-  // Send notifications if files were moved
-  if (movedFiles.length > 0) {
-    sendSlackNotification(slackTo, MeetingName, movedFiles, destinationFolderUrl);
-    sendEmailNotification(MeetingName, movedFiles, destinationFolderUrl, emailTo);
   }
 }
 
@@ -385,10 +384,10 @@ function logMove(sheet, meetingName, newName, movedTo, recFile, result) {
  * @param {Object[]} movedFiles - 移動されたファイルの情報
  * @param {string} destinationFolderUrl - 移動先フォルダURL
  */
-function sendSlackNotification(MeetingSlackWebhook,meetingName, movedFiles, destinationFolderUrl) {
-  const SystemSlackWebhook = PropertiesService.getScriptProperties().getProperty('SLACK_WEBHOOK');
+function sendSlackNotification(meetingSlackWebhook, meetingName, fileInfo, destinationFolderUrl) {
+  const systemSlackWebhook = PropertiesService.getScriptProperties().getProperty('SLACK_WEBHOOK');
 
-  const message = createNotificationMessage(meetingName, movedFiles, destinationFolderUrl);
+  const message = createNotificationMessage(meetingName, fileInfo, destinationFolderUrl);
   const payload = {
     "text": message
   };
@@ -399,29 +398,48 @@ function sendSlackNotification(MeetingSlackWebhook,meetingName, movedFiles, dest
     "payload": JSON.stringify(payload)
   };
 
-
-  if (!MeetingSlackWebhook) {
-    console.log("MeetingSlackWebhook URL not set. Skipping notification.");
-  } else {
-   try {
-     UrlFetchApp.fetch(MeetingSlackWebhook, options);
-     console.log("Slack notification sent successfully.");
-   } catch (error) {
-     console.error("Error sending Slack notification: " + error.toString());
-   }
+  // Send to meeting-specific Slack if webhook is provided
+  if (meetingSlackWebhook) {
+    try {
+      UrlFetchApp.fetch(meetingSlackWebhook, options);
+      console.log("Meeting-specific Slack notification sent successfully.");
+    } catch (error) {
+      console.error("Error sending meeting-specific Slack notification: " + error.toString());
+    }
   }
 
-
-  if (!SystemSlackWebhook) {
-    console.log("Slack webhook URL not set. Skipping notification.");
-    return;
+  // Always send to system Slack
+  if (systemSlackWebhook) {
+    try {
+      UrlFetchApp.fetch(systemSlackWebhook, options);
+      console.log("System Slack notification sent successfully.");
+    } catch (error) {
+      console.error("Error sending system Slack notification: " + error.toString());
+    }
   } else {
-   try {
-     UrlFetchApp.fetch(SystemSlackWebhook, options);
-     console.log("SystemSlackWebhook notification sent successfully.");
-   } catch (error) {
-     console.error("Error sending SystemSlackWebhook notification: " + error.toString());
-   }
+    console.log("System Slack webhook URL not set. Skipping system notification.");
+  }
+}
+
+function sendEmailNotification(meetingName, fileInfo, destinationFolderUrl, emailTo) {
+  if (!emailTo) {
+    console.log("No email addresses provided. Skipping email notification.");
+    return;
+  }
+
+  const message = createNotificationMessage(meetingName, fileInfo, destinationFolderUrl);
+  const subject = "Meet録画ファイル移動通知: " + meetingName;
+
+  const emailAddresses = emailTo.split(/[\s,;]+/).filter(email => email.trim() !== '');
+
+  try {
+    GmailApp.sendEmail(emailAddresses[0], subject, message, {
+      cc: emailAddresses.slice(1).join(','),
+      name: 'Meet録画管理システム'
+    });
+    console.log("Email notification sent successfully.");
+  } catch (error) {
+    console.error("Error sending email notification: " + error.toString());
   }
 }
 
@@ -431,14 +449,14 @@ function sendSlackNotification(MeetingSlackWebhook,meetingName, movedFiles, dest
  * @param {string} destinationFolderUrl - 移動先フォルダURL
  * @param {string} emailTo - 通知先メールアドレス（複数可）
  */
-function sendEmailNotification(meetingName, movedFiles, destinationFolderUrl, emailTo) {
+function sendEmailNotification(meetingName, fileInfo, destinationFolderUrl, emailTo) {
   if (!emailTo) {
     console.log("No email addresses provided. Skipping email notification.");
     return;
   }
 
-  const message = createNotificationMessage(movedFiles, destinationFolderUrl);
-  const subject = "Meet録画ファイル移動通知" + meetingName;
+  const message = createNotificationMessage(meetingName, fileInfo, destinationFolderUrl);
+  const subject = "Meet録画ファイル移動通知: " + meetingName;
 
   const emailAddresses = emailTo.split(/[\s,;]+/).filter(email => email.trim() !== '');
 
@@ -459,13 +477,15 @@ function sendEmailNotification(meetingName, movedFiles, destinationFolderUrl, em
  * @param {string} destinationFolderUrl - 移動先フォルダURL
  * @return {string} 作成された通知メッセージ
  */
-function createNotificationMessage(meetingName, movedFiles, destinationFolderUrl) {
-  let message = "Meet会議" + meetingName + " の録画をフォルダに移動しました。\n";
-  message += `フォルダURL: ${destinationFolderUrl}\n\n移動したファイル:\n`;
-  
-  for (let file of movedFiles) {
-    message += `- ${file.name}: ${file.url}\n`;
+function createNotificationMessage(meetingName, fileInfo, destinationFolderUrl) {
+  if (!meetingName || !fileInfo || !destinationFolderUrl) {
+    console.error("Missing information for notification message:", { meetingName, fileInfo, destinationFolderUrl });
+    return "エラー: 通知メッセージの生成に必要な情報が不足しています。";
   }
+
+  let message = `Meet会議 "${meetingName}" の録画ファイル(1件)をフォルダに移動しました。\n`;
+  message += `フォルダURL: ${destinationFolderUrl}\n\n移動したファイル:\n`;
+  message += `- ${fileInfo.name}: ${fileInfo.url}\n`;
 
   return message;
 }
