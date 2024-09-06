@@ -3,6 +3,11 @@
  * MeetRecSearchAndMove.gs
  * Coded by Akihiko Shirai
  * https://github.com/aicuai/GenAI-Steam/blob/main/MeetRecSearchAndMove.gs
+ * Gmailに届いたGoogle Meetの録画ファイルを自動で指定フォルダに移動するスクリプトです。
+ * 処理の頻度は1時間に1回ぐらいでいいと思います。
+ * メールの削除等は、通知メールに対しては削除します。成功したメールは既読になり、次回から処理対象にはなりません（コード中に削除できるようなコメントも書いてあるので好きに変更してください）。もちろん何が起きても保証はできません！
+ * Script Property「SLACK_WEBHOOK」にSlackのIncoming WebhookのURLを渡すことで通知を受け取れます。これはメール受信者（このシステムの管理者）向けで、会議の受信者向けはシート上でメールアドレスとSlack通知を別途設定できます。
+ * 
  */
 
 // 必要なスコープを明示的に要求
@@ -72,7 +77,7 @@ function SearchAndMove() {
         // Check if this is a "processing" email and delete it
         if (body.includes("The recording of the meeting might still be processing. You'll be notified when it's ready.")) {
           console.log("Deleting processing notification email: " + subject);
-          message.moveToTrash();
+          message.moveToTrash(); //処理中の通知メールは不要ですよね
           continue;
         }
         
@@ -106,7 +111,7 @@ function SearchAndMove() {
 
             // Mark the email as read if all files were processed successfully
             if (allFilesProcessedSuccessfully) {
-              message.markRead();
+              message.markRead();        //もし削除したかったら  message.moveToTrash();
             }
 
             // Exit the script after processing one email
