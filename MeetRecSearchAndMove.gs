@@ -9,22 +9,98 @@
  * Script Property「SLACK_WEBHOOK」にSlackのIncoming WebhookのURLを渡すことで通知を受け取れます。これはメール受信者（このシステムの管理者）向けで、会議の受信者向けはシート上でメールアドレスとSlack通知を別途設定できます。
  * 
  */
+/**
+ * スプレッドシートが開かれたときに実行される関数
+ * カスタムメニューを追加し、主要機能へのアクセスを提供する
+ */
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('録画管理')
+    .addItem('権限設定', 'getOAuthToken')
+    .addItem('設定シート作成', 'createSetupSheets')
+    .addItem('毎時起動設定', 'setHourlyTrigger')
+    .addItem('即時処理', 'SearchAndMove')
+    .addToUi();
+}
 
+/**
+ * 必要なシート「SearchAndMove」と「MoveLog」を新規作成し、ヘッダ行を設定する
+ */
+function createSetupSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+
+  // SearchAndMoveシートの作成
+  let searchAndMoveSheet = ss.getSheetByName('SearchAndMove');
+  if (!searchAndMoveSheet) {
+    searchAndMoveSheet = ss.insertSheet('SearchAndMove');
+    const searchAndMoveHeaders = ['MeetingName', 'RenameTo', 'Serial', 'MoveToDriveURL', 'EmailTo', 'SlackTo', 'Check'];
+    searchAndMoveSheet.getRange(1, 1, 1, searchAndMoveHeaders.length).setValues([searchAndMoveHeaders]);
+    searchAndMoveSheet.getRange(1, 1, 1, searchAndMoveHeaders.length).setFontWeight('bold');
+    searchAndMoveSheet.setFrozenRows(1);
+  }
+
+  // MoveLogシートの作成
+  let moveLogSheet = ss.getSheetByName('MoveLog');
+  if (!moveLogSheet) {
+    moveLogSheet = ss.insertSheet('MoveLog');
+    const moveLogHeaders = ['ProceedTime', 'MeetingName', 'NewName', 'MovedTo', 'RecFile', 'Result'];
+    moveLogSheet.getRange(1, 1, 1, moveLogHeaders.length).setValues([moveLogHeaders]);
+    moveLogSheet.getRange(1, 1, 1, moveLogHeaders.length).setFontWeight('bold');
+    moveLogSheet.setFrozenRows(1);
+  }
+
+  ui.alert('設定シートの作成が完了しました。');
+}
+
+/**
+ * scheduledRunを1時間に1回実行するトリガーを設定する
+ */
+function setHourlyTrigger() {
+  const ui = SpreadsheetApp.getUi();
+
+  // 既存のトリガーを削除
+  const triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'scheduledRun') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  // 新しいトリガーを作成
+  ScriptApp.newTrigger('scheduledRun')
+    .timeBased()
+    .everyHours(1)
+    .create();
+
+  ui.alert('毎時起動の設定が完了しました。');
+}
+
+/**
+ * SearchAndMove関数を即時実行する
+ */
+function runSearchAndMoveNow() {
+  const ui = SpreadsheetApp.getUi();
+  
+  try {
+    SearchAndMove();
+    ui.alert('処理が完了しました。');
+  } catch (error) {
+    ui.alert('エラーが発生しました: ' + error.toString());
+  }
+}
 // 必要なスコープを明示的に要求
 function getOAuthToken() {
   DriveApp.getRootFolder();
   GmailApp.getInboxUnreadCount();
   SpreadsheetApp.getActiveSpreadsheet();
 }
-
 /**
  * SearchAndMoveメイン関数：Gmailの未読メールを検索し、Meet録画ファイルを指定されたフォルダに移動する
  * - スプレッドシートから設定を読み込む
  * - 未読メールを検索し、ファイルリンクを抽出
  * - ファイルを移動し、名前を変更
  * - 処理結果をログに記録し、Slack通知とメール通知を送信
- * - メールの検索を古い順に処理するように変更します。
- * - ファイルの処理に成功したら、スクリプトを終了するように修正します。
  */
 function SearchAndMove() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -38,16 +114,19 @@ function SearchAndMove() {
   const emailToColumnIndex = headers.indexOf('EmailTo') + 1;
   const slackToColumnIndex = headers.indexOf('SlackTo') + 1;
 
+  // Get background color from Script Properties
+  const bgPink = PropertiesService.getScriptProperties().getProperty('BG_PINK') || '#FFB6C1';
+
   for (let i = 0; i < searchData.length; i++) {
     const row = searchData[i];
-    const [meetingName, renameTo, serial, moveToDriveURL, emailToAddress, slackToEndpoint] = row;
+    let [meetingName, renameTo, serial, moveToDriveURL, emailToAddress, slackToEndpoint] = row;
     console.log(`Processing row ${i + 2}: MeetingName=${meetingName}, RenameTo=${renameTo}, Serial=${serial}, MoveToDriveURL=${moveToDriveURL}, EmailTo=${emailToAddress}, SlackTo=${slackToEndpoint}`);
     
     const moveToDriveId = getDriveIdFromUrl(moveToDriveURL);
 
     if (!moveToDriveId) {
       console.error("Invalid destination folder URL: " + moveToDriveURL);
-      searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue("Error: Invalid destination folder URL").setBackground('#FFB6C1');
+      searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue("Error: Invalid destination folder URL").setBackground(bgPink);
       continue;
     }
 
@@ -57,7 +136,7 @@ function SearchAndMove() {
       console.log("Destination folder name: " + destinationFolder.getName());
     } catch (folderError) {
       console.error("Error accessing destination folder: " + folderError.toString());
-      searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue("Error: Cannot access destination folder").setBackground('#FFB6C1');
+      searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue("Error: Cannot access destination folder").setBackground(bgPink);
       continue;
     }
     
@@ -66,8 +145,15 @@ function SearchAndMove() {
     threads.reverse(); // Process oldest first
     
     console.log("Search Gmail for: " + meetingName);
+    let newSerial = parseInt(serial);
+    let processedAnyFiles = false;
+
     for (let thread of threads) {
+      newSerial += 1;  // Increment serial for each thread (email)
       const messages = thread.getMessages();
+      let threadProcessedFiles = [];
+      let allFilesProcessedSuccessfully = true;
+
       for (let message of messages) {
         const subject = message.getSubject();
         const body = message.getBody();
@@ -77,63 +163,67 @@ function SearchAndMove() {
         // Check if this is a "processing" email and delete it
         if (body.includes("The recording of the meeting might still be processing. You'll be notified when it's ready.")) {
           console.log("Deleting processing notification email: " + subject);
-          message.moveToTrash(); //処理中の通知メールは不要ですよね
+          message.moveToTrash();
           continue;
         }
         
         const fileURLs = extractFileURLs(body);
         
         if (fileURLs.length > 0) {
-          const processedFiles = [];
-          const processedURLs = new Set(); // 追加: 処理済みURLを追跡するためのSet
-          let allFilesProcessedSuccessfully = true;
+          const processedURLs = new Set();
 
           for (let fileURL of fileURLs) {
-            // 追加: URLが既に処理済みの場合はスキップ
             if (processedURLs.has(fileURL)) {
               console.log(`Skipping duplicate URL: ${fileURL}`);
               continue;
             }
 
-            const result = processFile(fileURL, subject, meetingName, renameTo, serial, moveToDriveId, moveToDriveURL, searchAndMoveSheet, moveLogSheet, i, checkColumnIndex);
+            const result = processFile(fileURL, subject, meetingName, renameTo, newSerial.toString(), moveToDriveId, moveToDriveURL, searchAndMoveSheet, moveLogSheet, i, checkColumnIndex, bgPink);
             if (result.success) {
-              processedFiles.push(result.fileInfo);
-              processedURLs.add(fileURL); // 追加: 処理済みURLをSetに追加
+              threadProcessedFiles.push(result.fileInfo);
+              processedURLs.add(fileURL);
+              processedAnyFiles = true;
             } else {
               allFilesProcessedSuccessfully = false;
             }
           }
-
-          if (processedFiles.length > 0) {
-            // Send notifications for all processed files in this email
-            sendSlackNotification(slackToEndpoint, meetingName, processedFiles, moveToDriveURL);
-            sendEmailNotification(meetingName, processedFiles, moveToDriveURL, emailToAddress);
-
-            // Mark the email as read if all files were processed successfully
-            if (allFilesProcessedSuccessfully) {
-              message.markRead();        //もし削除したかったら  message.moveToTrash();
-            }
-
-            // Exit the script after processing one email
-            console.log("Successfully processed files from one email. Exiting script.");
-            return;
-          }
         } else {
           const errorMessage = 'Error: No file links found in email';
           console.log('Debug: ' + errorMessage);
-          logMove(moveLogSheet, meetingName, '', moveToDriveURL, 'N/A', errorMessage);
-          searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue(errorMessage).setBackground('#FFB6C1');
+        }
+      }
+
+      if (threadProcessedFiles.length > 0) {
+        // Send notifications for all processed files in this thread (email)
+        sendSlackNotification(slackToEndpoint, meetingName, threadProcessedFiles, moveToDriveURL);
+        sendEmailNotification(meetingName, threadProcessedFiles, moveToDriveURL, emailToAddress);
+
+        // Mark the thread as read if all files were processed successfully
+        if (allFilesProcessedSuccessfully) {
+          thread.markRead();
         }
       }
     }
     
+    // Update the serial in the SearchAndMove sheet if any files were processed
+    if (processedAnyFiles) {
+      searchAndMoveSheet.getRange(i + 2, serialColumnIndex).setValue(newSerial);
+      console.log(`Updated serial for ${meetingName} to ${newSerial}`);
+    }
+
     if (threads.length === 0) {
       const message = 'No unread emails found';
       console.log(message + ' for: ' + meetingName);
-      searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue(message).setBackground('#FFB6C1');
+    }
+
+    // Exit the script after processing one meeting's emails
+    if (processedAnyFiles) {
+      console.log("Successfully processed files for one meeting. Exiting script.");
+      return;
     }
   }
 }
+
 
 function sendSlackNotification(meetingSlackWebhook, meetingName, processedFiles, destinationFolderUrl) {
   const systemSlackWebhook = PropertiesService.getScriptProperties().getProperty('SLACK_WEBHOOK');
@@ -442,7 +532,7 @@ function checkFilePermissions(file) {
 }
 
 /**
- * 移動操作をログに記録する
+ * 移動操作をログに記録し、シートを更新する
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - ログを記録するシート
  * @param {string} meetingName - ミーティング名
  * @param {string} newName - 新しいファイル名
@@ -451,9 +541,13 @@ function checkFilePermissions(file) {
  * @param {string} result - 処理結果
  */
 function logMove(sheet, meetingName, newName, movedTo, recFile, result) {
+  // 1行目を固定
+  sheet.setFrozenRows(1);
+
   const now = new Date();
   const lastRow = sheet.getLastRow() + 1;
   
+  // 新しいログエントリを追加
   sheet.getRange(lastRow, 1).setValue(now).setNumberFormat("yyyy/mm/dd hh:mm:ss");
   sheet.getRange(lastRow, 2).setValue(meetingName);
   sheet.getRange(lastRow, 3).setValue(newName);
@@ -464,8 +558,16 @@ function logMove(sheet, meetingName, newName, movedTo, recFile, result) {
   if (result === 'Moved.') {
     sheet.getRange(lastRow, 6).setBackground('lightgreen');
   }
-}
 
+  // データ範囲を取得（1行目のヘッダーを除く）
+  const dataRange = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn());
+
+  // A列（ProceedTime）で降順にソート
+  dataRange.sort({column: 1, ascending: false});
+
+  // 変更を適用
+  SpreadsheetApp.flush();
+}
 
 // Run the SearchAndMove function daily
 function scheduledRun() {
