@@ -140,7 +140,9 @@ function SearchAndMove() {
       continue;
     }
     
-    const query = `is:unread subject:"${meetingName}" from:meet-recordings-noreply@google.com`;
+//    const query = `is:unread subject:"${meetingName}" from:meet-recordings-noreply@google.com`;
+//    const query = `is:unread subject:"${meetingName}" from:meetings-noreply@google.com`; //2024/9中旬ごろから送信者変更がありました
+    const query = `is:unread subject:"${meetingName}"`; //2024/9/20- 特に発信者指定しない方式に変更
     const threads = GmailApp.search(query, 0, 10); // Limit to 10 threads for safety
     threads.reverse(); // Process oldest first
     
@@ -190,6 +192,7 @@ function SearchAndMove() {
         } else {
           const errorMessage = 'Error: No file links found in email';
           console.log('Debug: ' + errorMessage);
+          console.log(body);
         }
       }
 
