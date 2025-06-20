@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import sys
 import argparse
@@ -6,39 +5,16 @@ import shutil
 import subprocess
 from pathlib import Path
 
-def print_readme():
-    print("""\
-🎬 vconcat.py - Video Concatenation Tool with ffmpeg
-
-Usage:
-  python3 vconcat.py [options]
-
-Options:
-  --src-dir=DIR          Source directory (default: current directory)
-  --target=EXT           File extension to process (default: mp4)
-  --dest=FILE            Output path (default: ./concat.mp4)
-  --strict=WxH           Enforce resolution (e.g., 1920x1080)
-  --inpose=FILE          Overlay transparent PNG image
-  --trailer=FILE         Append trailer video at the end
-  --audio=FILE           External audio file to mix or force replace
-  --audio-mode=MODE      "mix" (default) or "force"
-  --remove               Move processed inputs to trash after done
-  --normalize            Apply audio loudness normalization (-23 LUFS)
-
-Dependencies:
-  - ffmpeg must be installed.
-    👉 macOS: brew install ffmpeg
-""")
-    sys.exit(0)
-
-def check_ffmpeg():
-    if subprocess.run(["which", "ffmpeg"], stdout=subprocess.DEVNULL).returncode != 0:
-        print("❌ ffmpeg is not installed.")
-        print("👉 Install it with:\n   brew install ffmpeg")
-        sys.exit(1)
-
-def run_ffmpeg(cmd):
-    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def get_duration(path):
+    result = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path)
+    ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try:
+        return float(result.stdout.strip())
+    except:
+        return 0.0
 
 def has_audio_stream(video_path: Path) -> bool:
     result = subprocess.run([
@@ -46,6 +22,9 @@ def has_audio_stream(video_path: Path) -> bool:
         "-show_streams", "-select_streams", "a", "-loglevel", "error"
     ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     return bool(result.stdout.strip())
+
+def run_ffmpeg(cmd):
+    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def resize_video(src, dst, resolution):
     w, h = resolution.split("x")
@@ -58,21 +37,29 @@ def overlay_image(src, dst, overlay_path):
         "-filter_complex", "overlay=0:0", "-c:a", "copy", str(dst)
     ])
 
-def apply_audio(src, dst, audio_path, mode):
+def apply_audio(src, dst, audio_path, mode, shortest=False):
     if mode == "mix" and not has_audio_stream(src):
-        print("⚠️  No audio stream detected in video. Switching to --audio-mode=force.")
+        print("⚠️  No audio stream in video. Switching to force mode.")
         mode = "force"
+    fade_filter = "afade=t=out:st=999:d=2"
     if mode == "force":
-        run_ffmpeg([
+        cmd = [
             "ffmpeg", "-y", "-i", str(src), "-i", str(audio_path),
-            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-shortest", str(dst)
-        ])
+            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy"
+        ]
+        if shortest:
+            cmd += ["-shortest"]
+        cmd += [str(dst)]
     else:
-        run_ffmpeg([
+        cmd = [
             "ffmpeg", "-y", "-i", str(src), "-i", str(audio_path),
-            "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=shortest", "-c:v", "copy",
-            "-shortest", str(dst)
-        ])
+            "-filter_complex", f"[1:a]{fade_filter}[fade];[0:a][fade]amix=inputs=2:duration=shortest[outa]",
+            "-map", "0:v", "-map", "[outa]", "-c:v", "copy"
+        ]
+        if shortest:
+            cmd += ["-shortest"]
+        cmd += [str(dst)]
+    run_ffmpeg(cmd)
 
 def normalize_audio(src, dst):
     result = subprocess.run([
@@ -81,7 +68,7 @@ def normalize_audio(src, dst):
         "-c:v", "copy", str(dst)
     ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if not dst.exists():
-        print("❌ Failed to normalize audio. ffmpeg output:")
+        print("❌ Audio normalize failed.")
         print(result.stdout)
         sys.exit(1)
 
@@ -101,12 +88,9 @@ def main():
     parser.add_argument("--audio-mode", type=str, choices=["mix", "force"], default="mix")
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--normalize", action="store_true")
+    parser.add_argument("--shortest", action="store_true")
     args = parser.parse_args()
 
-    if len(sys.argv) == 1:
-        print_readme()
-
-    check_ffmpeg()
     src_dir = Path(args.src_dir).resolve()
     ext = args.target.lower()
     output = Path(args.dest).resolve()
@@ -131,7 +115,8 @@ def main():
     print("📜 Processing files:")
     processed_files = []
     for i, f in enumerate(files):
-        print(f" - {f.name}")
+        dur = get_duration(f)
+        print(f" - {f.name} ({dur:.1f} sec)")
         tmp = f
         work_file = temp_dir / f"work_{i:03d}.{ext}"
         if resolution:
@@ -145,7 +130,9 @@ def main():
 
     if trailer:
         print(f"📎 Appending trailer: {trailer.name}")
-        processed_files.append(trailer)
+        trailer_tmp = temp_dir / "trailer_reencoded.mp4"
+        resize_video(trailer, trailer_tmp, resolution or "1920x1080")
+        processed_files.append(trailer_tmp)
 
     concat_list = temp_dir / "concat_list.txt"
     with open(concat_list, "w") as f:
@@ -153,13 +140,17 @@ def main():
             f.write(f"file '{vid}'\n")
 
     intermediate_output = temp_dir / "output_temp.mp4"
-    print("▶️ Concatenating videos...")
-    run_ffmpeg(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list), "-c", "copy", str(intermediate_output)])
+    print("▶️ Concatenating videos (re-encoded)...")
+    run_ffmpeg([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p",
+        str(intermediate_output)
+    ])
 
     audio_output = temp_dir / "output_audio.mp4"
     if audio:
         print(f"🎵 Adding audio: {audio.name} (mode: {audio_mode})")
-        apply_audio(intermediate_output, audio_output, audio, audio_mode)
+        apply_audio(intermediate_output, audio_output, audio, audio_mode, args.shortest)
     else:
         shutil.copy(intermediate_output, audio_output)
 
