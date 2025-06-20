@@ -76,6 +76,17 @@ def move_to_trash(path):
     trash_dir = Path.home() / ".Trash"
     shutil.move(str(path), trash_dir / path.name)
 
+def get_video_duration(path):
+    result = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "v",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(path)
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        return float(result.stdout.strip())
+    except:
+        return 0.0
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--src-dir", type=str, default=".")
@@ -167,10 +178,20 @@ def main():
     final_output = temp_dir / "output_final.mp4"
     if args.fadeout:
         print("🎧 Applying final audio fade-out...")
-        run_ffmpeg([
-            "ffmpeg", "-y", "-i", str(normalized_output),
-            "-af", "afade=t=out:d=3", "-c:v", "copy", str(final_output)
-        ])
+
+        duration = get_video_duration(normalized_output)
+        if duration and duration > 3:
+            fade_start = duration - 3
+            final_output = temp_dir / "output_fadeout.mp4"
+            run_ffmpeg([
+                "ffmpeg", "-y", "-i", str(normalized_output),
+                "-af", f"afade=t=out:st={fade_start:.2f}:d=3",
+                "-c:v", "copy", str(final_output)
+            ])
+        else:
+            print("⚠️ Duration too short or unknown, skipping fade-out.")
+            shutil.copy(normalized_output, output)
+
     else:
         shutil.copy(normalized_output, final_output)
 
