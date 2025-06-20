@@ -8,10 +8,10 @@ from pathlib import Path
 
 def print_readme():
     print("""\
-🎬 concat_videos.py - Video Concatenation Tool with ffmpeg
+🎬 vconcat.py - Video Concatenation Tool with ffmpeg
 
 Usage:
-  python3 concat_videos.py [options]
+  python3 vconcat.py [options]
 
 Options:
   --src-dir=DIR          Source directory (default: current directory)
@@ -40,11 +40,17 @@ def check_ffmpeg():
 def run_ffmpeg(cmd):
     return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+def has_audio_stream(video_path: Path) -> bool:
+    result = subprocess.run([
+        "ffprobe", "-i", str(video_path),
+        "-show_streams", "-select_streams", "a", "-loglevel", "error"
+    ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return bool(result.stdout.strip())
+
 def resize_video(src, dst, resolution):
     w, h = resolution.split("x")
     vf = f"scale=w={w}:h={h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2"
-    run_ffmpeg(["ffmpeg", "-y", "-i", str(src), "-vf", vf, "-c:a", "copy", str(dst)])
-
+    run_ffmpeg(["ffmpeg", "-y", "-i", str(src), "-vf", vf, "-r", "30", "-c:a", "copy", str(dst)])
 
 def overlay_image(src, dst, overlay_path):
     run_ffmpeg([
@@ -56,21 +62,17 @@ def apply_audio(src, dst, audio_path, mode):
     if mode == "mix" and not has_audio_stream(src):
         print("⚠️  No audio stream detected in video. Switching to --audio-mode=force.")
         mode = "force"
-
     if mode == "force":
         run_ffmpeg([
             "ffmpeg", "-y", "-i", str(src), "-i", str(audio_path),
             "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-shortest", str(dst)
         ])
-    else:  # mix
+    else:
         run_ffmpeg([
             "ffmpeg", "-y", "-i", str(src), "-i", str(audio_path),
             "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=shortest", "-c:v", "copy",
             "-shortest", str(dst)
         ])
-
-
-
 
 def normalize_audio(src, dst):
     result = subprocess.run([
@@ -78,13 +80,10 @@ def normalize_audio(src, dst):
         "-filter:a", "loudnorm=I=-23:LRA=7:TP=-2",
         "-c:v", "copy", str(dst)
     ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
     if not dst.exists():
         print("❌ Failed to normalize audio. ffmpeg output:")
         print(result.stdout)
         sys.exit(1)
-
-
 
 def move_to_trash(path):
     trash_dir = Path.home() / ".Trash"
@@ -102,14 +101,12 @@ def main():
     parser.add_argument("--audio-mode", type=str, choices=["mix", "force"], default="mix")
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--normalize", action="store_true")
-
     args = parser.parse_args()
 
     if len(sys.argv) == 1:
         print_readme()
 
     check_ffmpeg()
-
     src_dir = Path(args.src_dir).resolve()
     ext = args.target.lower()
     output = Path(args.dest).resolve()
@@ -127,7 +124,6 @@ def main():
     files = sorted([f for f in src_dir.glob(f"*.{ext}") if f.is_file()])
     if trailer and trailer in files:
         files.remove(trailer)
-
     if not files:
         print("❌ No video files found.")
         sys.exit(1)
@@ -138,7 +134,6 @@ def main():
         print(f" - {f.name}")
         tmp = f
         work_file = temp_dir / f"work_{i:03d}.{ext}"
-
         if resolution:
             resize_video(tmp, work_file, resolution)
             tmp = work_file
@@ -176,7 +171,7 @@ def main():
         shutil.copy(audio_output, normalized_output)
 
     shutil.copy(normalized_output, output)
-    print(f"\n✅ Done! Output saved to: {output}")
+    print(f"✅ Done! Output saved to: {output}")
 
     if args.remove:
         for f in files:
