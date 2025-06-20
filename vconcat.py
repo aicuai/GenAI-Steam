@@ -89,6 +89,7 @@ def main():
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--normalize", action="store_true")
     parser.add_argument("--shortest", action="store_true")
+    parser.add_argument("--fadeout", action="store_true")
     args = parser.parse_args()
 
     src_dir = Path(args.src_dir).resolve()
@@ -161,7 +162,19 @@ def main():
     else:
         shutil.copy(audio_output, normalized_output)
 
-    shutil.copy(normalized_output, output)
+
+    # Final fade-out if requested
+    final_output = temp_dir / "output_final.mp4"
+    if args.fadeout:
+        print("🎧 Applying final audio fade-out...")
+        run_ffmpeg([
+            "ffmpeg", "-y", "-i", str(normalized_output),
+            "-af", "afade=t=out:d=3", "-c:v", "copy", str(final_output)
+        ])
+    else:
+        shutil.copy(normalized_output, final_output)
+
+    shutil.copy(final_output, output)
     print(f"✅ Done! Output saved to: {output}")
 
     if args.remove:
