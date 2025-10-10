@@ -1,6 +1,6 @@
 /**
- * Sora2gen.gs API 動画生成ツール for Google Sheets (ScriptPropertiesベース設定版)
- *
+ * Sora2gen.gs API 動画生成ツール for Google Sheets
+ * https://github.com/aicuai/GenAI-Steam/blob/main/Sora2gen.gs
  * このスクリプトは、Googleスプレッドシートから直接OpenAI Sora2 APIを操作して、
  * 動画の生成と管理を行うためのものです。
  * claspなどのローカル開発環境での管理や、トリガーによる自動実行を想定しています。
