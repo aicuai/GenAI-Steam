@@ -6,7 +6,10 @@
  * Gmailに届いたGoogle Meetの録画ファイルを自動で指定フォルダに移動するスクリプトです。
  * 処理の頻度は1時間に1回ぐらいでいいと思います。
  * メールの削除等は、通知メールに対しては削除します。成功したメールは既読になり、次回から処理対象にはなりません（コード中に削除できるようなコメントも書いてあるので好きに変更してください）。もちろん何が起きても保証はできません！
- * Script Property「SLACK_WEBHOOK」にSlackのIncoming WebhookのURLを渡すことで通知を受け取れます。これはメール受信者（このシステムの管理者）向けで、会議の受信者向けはシート上でメールアドレスとSlack通知を別途設定できます。
+ * Script Property「SLACK_WEBHOOK」にSlackのIncoming WebhookのURLを渡すことでSlack通知を受け取れます。
+ * Script Property「DISCORD_WEBHOOK」にDiscordのWebhookのURLを渡すことでDiscord通知を受け取れます。
+ * いずれもシステム管理者向けの全体通知です。会議ごとの通知先は「Slack/Discord」列にWebhook URLを設定してください（URLから自動判定）。
+ * 複数のWebhook URLを改行またはカンマ区切りで指定可能です。Slack/Discord混在もOKです。
  * 
  */
 /**
@@ -34,10 +37,34 @@ function createSetupSheets() {
   let searchAndMoveSheet = ss.getSheetByName('SearchAndMove');
   if (!searchAndMoveSheet) {
     searchAndMoveSheet = ss.insertSheet('SearchAndMove');
-    const searchAndMoveHeaders = ['MeetingName', 'RenameTo', 'Serial', 'MoveToDriveURL', 'EmailTo', 'SlackTo', 'Check'];
+    const searchAndMoveHeaders = ['MeetingName', 'RenameTo', 'Serial', 'MoveToDriveURL', 'EmailTo', 'Slack/Discord', 'Check'];
     searchAndMoveSheet.getRange(1, 1, 1, searchAndMoveHeaders.length).setValues([searchAndMoveHeaders]);
     searchAndMoveSheet.getRange(1, 1, 1, searchAndMoveHeaders.length).setFontWeight('bold');
     searchAndMoveSheet.setFrozenRows(1);
+  } else {
+    // 既存シートのマイグレーション: "SlackTo" → "Slack/Discord" にリネーム、"DiscordTo"列があれば統合して削除
+    const existingHeaders = searchAndMoveSheet.getRange(1, 1, 1, searchAndMoveSheet.getLastColumn()).getValues()[0];
+    const slackToIndex = existingHeaders.indexOf('SlackTo');
+    const discordToIndex = existingHeaders.indexOf('DiscordTo');
+
+    if (slackToIndex !== -1) {
+      searchAndMoveSheet.getRange(1, slackToIndex + 1).setValue('Slack/Discord');
+    }
+    if (discordToIndex !== -1) {
+      // DiscordTo列のデータをSlack/Discord列に統合してから列を削除
+      const lastRow = searchAndMoveSheet.getLastRow();
+      if (lastRow > 1 && slackToIndex !== -1) {
+        for (let r = 2; r <= lastRow; r++) {
+          const discordVal = searchAndMoveSheet.getRange(r, discordToIndex + 1).getValue();
+          if (discordVal) {
+            const slackVal = searchAndMoveSheet.getRange(r, slackToIndex + 1).getValue();
+            const merged = slackVal ? slackVal + '\n' + discordVal : discordVal;
+            searchAndMoveSheet.getRange(r, slackToIndex + 1).setValue(merged);
+          }
+        }
+      }
+      searchAndMoveSheet.deleteColumn(discordToIndex + 1);
+    }
   }
 
   // MoveLogシートの作成
@@ -95,12 +122,39 @@ function getOAuthToken() {
   GmailApp.getInboxUnreadCount();
   SpreadsheetApp.getActiveSpreadsheet();
 }
+
+/**
+ * Webhook URLからサービス種別を判定する
+ * @param {string} url - Webhook URL
+ * @return {string} 'slack', 'discord', または 'unknown'
+ */
+function detectWebhookType(url) {
+  if (!url) return 'unknown';
+  url = url.trim();
+  if (url.includes('hooks.slack.com')) return 'slack';
+  if (url.includes('discord.com/api/webhooks') || url.includes('discordapp.com/api/webhooks')) return 'discord';
+  return 'unknown';
+}
+
+/**
+ * Webhook URLのセル値（改行・カンマ区切り対応）をパースして配列にする
+ * @param {string} cellValue - セルの値
+ * @return {string[]} Webhook URLの配列
+ */
+function parseWebhookUrls(cellValue) {
+  if (!cellValue) return [];
+  return String(cellValue)
+    .split(/[\n,;]+/)
+    .map(url => url.trim())
+    .filter(url => url.length > 0);
+}
+
 /**
  * SearchAndMoveメイン関数：Gmailの未読メールを検索し、Meet録画ファイルを指定されたフォルダに移動する
  * - スプレッドシートから設定を読み込む
  * - 未読メールを検索し、ファイルリンクを抽出
  * - ファイルを移動し、名前を変更
- * - 処理結果をログに記録し、Slack通知とメール通知を送信
+ * - 処理結果をログに記録し、Slack/Discord通知とメール通知を送信
  */
 function SearchAndMove() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -112,15 +166,21 @@ function SearchAndMove() {
   const checkColumnIndex = headers.indexOf('Check') + 1;
   const serialColumnIndex = headers.indexOf('Serial') + 1;
   const emailToColumnIndex = headers.indexOf('EmailTo') + 1;
-  const slackToColumnIndex = headers.indexOf('SlackTo') + 1;
+  const webhookColumnIndex = headers.indexOf('Slack/Discord') + 1;
 
   // Get background color from Script Properties
   const bgPink = PropertiesService.getScriptProperties().getProperty('BG_PINK') || '#FFB6C1';
 
   for (let i = 0; i < searchData.length; i++) {
     const row = searchData[i];
-    let [meetingName, renameTo, serial, moveToDriveURL, emailToAddress, slackToEndpoint] = row;
-    console.log(`Processing row ${i + 2}: MeetingName=${meetingName}, RenameTo=${renameTo}, Serial=${serial}, MoveToDriveURL=${moveToDriveURL}, EmailTo=${emailToAddress}, SlackTo=${slackToEndpoint}`);
+    const meetingName = row[headers.indexOf('MeetingName')];
+    const renameTo = row[headers.indexOf('RenameTo')];
+    let serial = row[headers.indexOf('Serial')];
+    const moveToDriveURL = row[headers.indexOf('MoveToDriveURL')];
+    const emailToAddress = row[headers.indexOf('EmailTo')];
+    const webhookCell = webhookColumnIndex > 0 ? row[headers.indexOf('Slack/Discord')] : '';
+
+    console.log(`Processing row ${i + 2}: MeetingName=${meetingName}, RenameTo=${renameTo}, Serial=${serial}, MoveToDriveURL=${moveToDriveURL}, EmailTo=${emailToAddress}, Webhooks=${webhookCell}`);
     
     const moveToDriveId = getDriveIdFromUrl(moveToDriveURL);
 
@@ -140,8 +200,6 @@ function SearchAndMove() {
       continue;
     }
     
-//    const query = `is:unread subject:"${meetingName}" from:meet-recordings-noreply@google.com`;
-//    const query = `is:unread subject:"${meetingName}" from:meetings-noreply@google.com`; //2024/9中旬ごろから送信者変更がありました
     const query = `is:unread subject:"${meetingName}"`; //2024/9/20- 特に発信者指定しない方式に変更
     const threads = GmailApp.search(query, 0, 10); // Limit to 10 threads for safety
     threads.reverse(); // Process oldest first
@@ -197,8 +255,8 @@ function SearchAndMove() {
       }
 
       if (threadProcessedFiles.length > 0) {
-        // Send notifications for all processed files in this thread (email)
-        sendSlackNotification(slackToEndpoint, meetingName, threadProcessedFiles, moveToDriveURL);
+        // Send webhook notifications (Slack/Discord auto-detected)
+        sendWebhookNotifications(webhookCell, meetingName, threadProcessedFiles, moveToDriveURL);
         sendEmailNotification(meetingName, threadProcessedFiles, moveToDriveURL, emailToAddress);
 
         // Mark the thread as read if all files were processed successfully
@@ -227,41 +285,78 @@ function SearchAndMove() {
   }
 }
 
-
-function sendSlackNotification(meetingSlackWebhook, meetingName, processedFiles, destinationFolderUrl) {
-  const systemSlackWebhook = PropertiesService.getScriptProperties().getProperty('SLACK_WEBHOOK');
-
+/**
+ * Webhook通知を送信する（Slack/Discord自動判定）
+ * 会議ごとのWebhook（Slack/Discord列）とシステム全体のWebhook（Script Properties）の両方に送信する
+ * @param {string} meetingWebhookCell - 会議ごとのWebhook URLセル値（改行/カンマ区切り可）
+ * @param {string} meetingName - ミーティング名
+ * @param {Array} processedFiles - 処理されたファイル情報の配列
+ * @param {string} destinationFolderUrl - 移動先フォルダURL
+ */
+function sendWebhookNotifications(meetingWebhookCell, meetingName, processedFiles, destinationFolderUrl) {
   const message = createNotificationMessage(meetingName, processedFiles, destinationFolderUrl);
-  const payload = {
-    "text": message
-  };
+
+  // 会議ごとのWebhook URLs
+  const meetingWebhooks = parseWebhookUrls(meetingWebhookCell);
+
+  // システム全体のWebhook URLs（Script Properties）
+  const systemSlack = PropertiesService.getScriptProperties().getProperty('SLACK_WEBHOOK');
+  const systemDiscord = PropertiesService.getScriptProperties().getProperty('DISCORD_WEBHOOK');
+
+  // 全Webhook URLを収集（重複排除）
+  const allWebhooks = new Set();
+  meetingWebhooks.forEach(url => allWebhooks.add(url));
+  if (systemSlack) allWebhooks.add(systemSlack);
+  if (systemDiscord) allWebhooks.add(systemDiscord);
+
+  for (const webhookUrl of allWebhooks) {
+    const type = detectWebhookType(webhookUrl);
+    if (type === 'unknown') {
+      console.log(`Unknown webhook type, skipping: ${webhookUrl}`);
+      continue;
+    }
+    sendSingleWebhook(webhookUrl, type, message);
+  }
+}
+
+/**
+ * 単一のWebhookに通知を送信する
+ * @param {string} webhookUrl - Webhook URL
+ * @param {string} type - 'slack' または 'discord'
+ * @param {string} message - 送信するメッセージ
+ */
+function sendSingleWebhook(webhookUrl, type, message) {
+  let payload;
+  let sendMessage = message;
+
+  if (type === 'discord') {
+    // Discord: 2000文字制限
+    if (sendMessage.length > 2000) {
+      sendMessage = sendMessage.substring(0, 1997) + '...';
+    }
+    payload = { "content": sendMessage };
+  } else {
+    // Slack
+    payload = { "text": sendMessage };
+  }
 
   const options = {
     "method": "post",
     "contentType": "application/json",
-    "payload": JSON.stringify(payload)
+    "payload": JSON.stringify(payload),
+    "muteHttpExceptions": true
   };
 
-  // Send to meeting-specific Slack if webhook is provided
-  if (meetingSlackWebhook) {
-    try {
-      UrlFetchApp.fetch(meetingSlackWebhook, options);
-      console.log("Meeting-specific Slack notification sent successfully.");
-    } catch (error) {
-      console.error("Error sending meeting-specific Slack notification: " + error.toString());
+  try {
+    const response = UrlFetchApp.fetch(webhookUrl, options);
+    const responseCode = response.getResponseCode();
+    if (responseCode >= 200 && responseCode < 300) {
+      console.log(`${type} notification sent successfully to: ${webhookUrl.substring(0, 50)}...`);
+    } else {
+      console.error(`${type} notification failed (HTTP ${responseCode}): ${response.getContentText()}`);
     }
-  }
-
-  // Always send to system Slack
-  if (systemSlackWebhook) {
-    try {
-      UrlFetchApp.fetch(systemSlackWebhook, options);
-      console.log("System Slack notification sent successfully.");
-    } catch (error) {
-      console.error("Error sending system Slack notification: " + error.toString());
-    }
-  } else {
-    console.log("System Slack webhook URL not set. Skipping system notification.");
+  } catch (error) {
+    console.error(`Error sending ${type} notification: ${error.toString()}`);
   }
 }
 
@@ -309,24 +404,28 @@ function createNotificationMessage(meetingName, processedFiles, destinationFolde
  */
 function getDriveIdFromUrl(url) {
   console.log("Extracting Drive ID from URL: " + url);
-  if (url.startsWith('https://drive.google.com/drive/folders/')) {
-    const id = url.split('/').pop();
-    console.log("Extracted folder ID: " + id);
-    return id;
-  }
   
+  // 対応1: /folders/パターン
+  let match = url.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (match) {
+    console.log("Extracted folder ID from /folders/: " + match[1]);
+    return match[1];
+  }
+
+  // 対応2: open?id=
   if (url.includes('open?id=')) {
     const id = url.split('open?id=')[1].split('&')[0];
     console.log("Extracted file ID from open?id= URL: " + id);
     return id;
   }
-  
-  const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+
+  // 対応3: /d/パターン
+  match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
   if (match) {
     console.log("Extracted file ID from /d/ URL: " + match[1]);
     return match[1];
   }
-  
+
   console.log("Failed to extract Drive ID from URL");
   return null;
 }
@@ -387,9 +486,8 @@ function processFile(fileURL, subject, meetingName, renameTo, serial, moveToDriv
       
       // Construct new file name
       const fileExtension = getFileExtension(file.getName());
-      let newFileName = `${renameTo}-${serial}-${dateString}${fileExtension}`;
+      let newFileName;
       if (serial) {
-
         newFileName = `${renameTo}-${serial}-${dateString}${fileExtension}`;
       } else {
         newFileName = `${renameTo}-${dateString}${fileExtension}`;
