@@ -124,6 +124,24 @@ function getOAuthToken() {
 }
 
 /**
+ * セルの値からコピペ時のゴミ文字を除去する
+ * Markdown装飾（__、**、``）、前後の空白、引用符などを除去
+ * @param {*} value - セルの値
+ * @return {string} クリーンな文字列
+ */
+function cleanCellValue(value) {
+  if (value === null || value === undefined) return '';
+  let s = String(value).trim();
+  // 前後のMarkdown装飾文字を繰り返し除去（__bold__, **bold**, `code`）
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/^[_*`'"]+|[_*`'"]+$/g, '').trim();
+  } while (s !== prev);
+  return s;
+}
+
+/**
  * Webhook URLからサービス種別を判定する
  * @param {string} url - Webhook URL
  * @return {string} 'slack', 'discord', または 'unknown'
@@ -145,7 +163,7 @@ function parseWebhookUrls(cellValue) {
   if (!cellValue) return [];
   return String(cellValue)
     .split(/[\n,;]+/)
-    .map(url => url.trim())
+    .map(url => cleanCellValue(url))
     .filter(url => url.length > 0);
 }
 
@@ -163,22 +181,33 @@ function SearchAndMove() {
   
   const searchData = searchAndMoveSheet.getDataRange().getValues();
   const headers = searchData.shift(); // Remove header row
-  const checkColumnIndex = headers.indexOf('Check') + 1;
-  const serialColumnIndex = headers.indexOf('Serial') + 1;
-  const emailToColumnIndex = headers.indexOf('EmailTo') + 1;
-  const webhookColumnIndex = headers.indexOf('Slack/Discord') + 1;
+
+  // ヘッダー名の揺れに対応するヘルパー（複数の候補名から最初に見つかったものを使う）
+  function findHeaderIndex(candidates) {
+    for (const name of candidates) {
+      const idx = headers.indexOf(name);
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  }
+
+  const checkColumnIndex = findHeaderIndex(['Check']) + 1;
+  const serialColumnIndex = findHeaderIndex(['Serial']) + 1;
+  const emailToColumnIndex = findHeaderIndex(['EmailTo']) + 1;
+  const driveUrlColumnIndex = findHeaderIndex(['MoveToDriveURL', 'MoveTo_DriveURL', 'MoveToDrive']);
+  const webhookColumnIndex = findHeaderIndex(['Slack/Discord', 'SlackTo']);
 
   // Get background color from Script Properties
   const bgPink = PropertiesService.getScriptProperties().getProperty('BG_PINK') || '#FFB6C1';
 
   for (let i = 0; i < searchData.length; i++) {
     const row = searchData[i];
-    const meetingName = row[headers.indexOf('MeetingName')];
-    const renameTo = row[headers.indexOf('RenameTo')];
-    let serial = row[headers.indexOf('Serial')];
-    const moveToDriveURL = row[headers.indexOf('MoveToDriveURL')];
-    const emailToAddress = row[headers.indexOf('EmailTo')];
-    const webhookCell = webhookColumnIndex > 0 ? row[headers.indexOf('Slack/Discord')] : '';
+    const meetingName = cleanCellValue(row[findHeaderIndex(['MeetingName'])]);
+    const renameTo = cleanCellValue(row[findHeaderIndex(['RenameTo'])]);
+    let serial = row[findHeaderIndex(['Serial'])];
+    const moveToDriveURL = driveUrlColumnIndex >= 0 ? cleanCellValue(row[driveUrlColumnIndex]) : '';
+    const emailToAddress = cleanCellValue(row[findHeaderIndex(['EmailTo'])]);
+    const webhookCell = webhookColumnIndex >= 0 ? cleanCellValue(row[webhookColumnIndex]) : '';
 
     console.log(`Processing row ${i + 2}: MeetingName=${meetingName}, RenameTo=${renameTo}, Serial=${serial}, MoveToDriveURL=${moveToDriveURL}, EmailTo=${emailToAddress}, Webhooks=${webhookCell}`);
     
@@ -193,10 +222,22 @@ function SearchAndMove() {
     // Verify folder exists and is accessible
     try {
       const destinationFolder = DriveApp.getFolderById(moveToDriveId);
-      console.log("Destination folder name: " + destinationFolder.getName());
+      const folderName = destinationFolder.getName();
+      console.log("Destination folder name: " + folderName);
+      // アクセス成功時にCheck列をクリア（前回エラーが残っていた場合）
+      searchAndMoveSheet.getRange(i + 2, checkColumnIndex).clearContent().clearFormat();
     } catch (folderError) {
-      console.error("Error accessing destination folder: " + folderError.toString());
-      searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue("Error: Cannot access destination folder").setBackground(bgPink);
+      const errMsg = folderError.toString();
+      console.error("Error accessing destination folder (ID: " + moveToDriveId + "): " + errMsg);
+      let userMessage;
+      if (errMsg.includes("is not found") || errMsg.includes("File not found") || errMsg.includes("does not exist")) {
+        userMessage = `Error: フォルダが存在しません (ID: ${moveToDriveId})`;
+      } else if (errMsg.includes("Access denied") || errMsg.includes("not have permission") || errMsg.includes("Forbidden")) {
+        userMessage = `Error: フォルダへのアクセス権限がありません (ID: ${moveToDriveId})。スクリプト実行者にフォルダの編集権限を付与してください。`;
+      } else {
+        userMessage = `Error: フォルダにアクセスできません (ID: ${moveToDriveId}): ${errMsg}`;
+      }
+      searchAndMoveSheet.getRange(i + 2, checkColumnIndex).setValue(userMessage).setBackground(bgPink);
       continue;
     }
     
@@ -403,6 +444,10 @@ function createNotificationMessage(meetingName, processedFiles, destinationFolde
  * @return {string|null} 抽出されたIDまたはnull
  */
 function getDriveIdFromUrl(url) {
+  if (!url || typeof url !== 'string' || url.trim() === '') {
+    console.log("getDriveIdFromUrl: URL is empty or undefined");
+    return null;
+  }
   console.log("Extracting Drive ID from URL: " + url);
   
   // 対応1: /folders/パターン
@@ -484,8 +529,8 @@ function processFile(fileURL, subject, meetingName, renameTo, serial, moveToDriv
         dateString = formatDate(dateString);
       }
       
-      // Construct new file name
-      const fileExtension = getFileExtension(file.getName());
+      // Construct new file name (MIMEタイプで動画判定し拡張子を決定)
+      const fileExtension = getFileExtension(file.getName(), file.getMimeType());
       let newFileName;
       if (serial) {
         newFileName = `${renameTo}-${serial}-${dateString}${fileExtension}`;
@@ -554,11 +599,32 @@ function processFile(fileURL, subject, meetingName, renameTo, serial, moveToDriv
 }
 
 /**
- * ファイル名から拡張子を取得する
+ * ファイルの拡張子を取得する（MIMEタイプ優先）
+ * 動画ファイル（video/*）は .mp4 に統一する
  * @param {string} fileName - ファイル名
+ * @param {string} [mimeType] - ファイルのMIMEタイプ（省略可）
  * @return {string} ファイルの拡張子（ドット含む）
  */
-function getFileExtension(fileName) {
+function getFileExtension(fileName, mimeType) {
+  // MIMEタイプによる拡張子マッピング（優先）
+  const mimeToExt = {
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
+    'video/quicktime': '.mov',
+    'video/x-msvideo': '.avi',
+    'video/x-matroska': '.mkv',
+    'audio/mpeg': '.mp3',
+    'audio/ogg': '.ogg',
+  };
+
+  if (mimeType) {
+    // 完全一致
+    if (mimeToExt[mimeType]) return mimeToExt[mimeType];
+    // video/* は .mp4 に統一（Google Meet録画対応）
+    if (mimeType.startsWith('video/')) return '.mp4';
+  }
+
+  // MIMEタイプが不明な場合はファイル名から取得
   const parts = fileName.split('.');
   return parts.length > 1 ? '.' + parts.pop() : '';
 }
