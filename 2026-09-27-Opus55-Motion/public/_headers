@@ -1,0 +1,9 @@
+/media/demo/Opus5.5-motion-graphics/assets/*
+  Cache-Control: public, max-age=86400
+
+/media/demo/Opus5.5-motion-graphics/source/*
+  Cache-Control: public, max-age=3600
+
+/media/demo/Opus5.5-motion-graphics/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

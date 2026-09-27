@@ -1,0 +1,52 @@
+[
+  {
+    "check": "desktop: 記事が 200 で返る",
+    "ok": true,
+    "detail": "200"
+  },
+  {
+    "check": "desktop: 横スクロールが出ない",
+    "ok": true,
+    "detail": "scrollWidth=1280"
+  },
+  {
+    "check": "mobile: 記事が 200 で返る",
+    "ok": true,
+    "detail": "200"
+  },
+  {
+    "check": "mobile: 横スクロールが出ない",
+    "ok": true,
+    "detail": "scrollWidth=390"
+  },
+  {
+    "check": "動画が読み込まれる",
+    "ok": true,
+    "detail": "duration=15.00s"
+  },
+  {
+    "check": "再生で時刻が進む",
+    "ok": true,
+    "detail": "currentTime=1.17s"
+  },
+  {
+    "check": "拍タイムライン: CLAUDE で28拍目へ",
+    "ok": true,
+    "detail": "currentTime=13.14s（期待 13.12s）"
+  },
+  {
+    "check": "ライブデモが描画する",
+    "ok": true,
+    "detail": "明るい画素サンプル=5345"
+  },
+  {
+    "check": "ソース zip がダウンロードできる",
+    "ok": true,
+    "detail": "200 12344 bytes"
+  },
+  {
+    "check": "ページ内の JavaScript エラーなし",
+    "ok": true,
+    "detail": ""
+  }
+]

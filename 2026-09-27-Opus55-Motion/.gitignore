@@ -1,0 +1,14 @@
+node_modules/
+.wrangler/
+motion/video.mp4
+motion/final.mp4
+motion/__pycache__/
+.DS_Store
+
+# ローカル実験（素材・書き出し）
+experiments/**/serve/song.*
+experiments/**/serve/jizura.html
+experiments/**/*.mp4
+experiments/**/*.png
+experiments/**/*.json
+!experiments/**/grid_*.json

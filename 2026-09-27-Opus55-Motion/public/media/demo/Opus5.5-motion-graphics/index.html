@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ついに"リズム感"を手に入れた Opus5.5にモーショングラフィックスを作らせてみた！ | AICU media</title>
+<meta name="description" content="素材ファイルゼロ、HTMLとPythonのコードだけで15秒・900コマのモーショングラフィックスと音楽を生成。Claude Opus 5.5 がどう作ったのかを、コードとともに解説します。">
+<link rel="canonical" href="https://aicu.ai/media/demo/Opus5.5-motion-graphics/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ついに&quot;リズム感&quot;を手に入れた Opus5.5にモーショングラフィックスを作らせてみた！">
+<meta property="og:description" content="128BPM×32拍＝15秒。映像も音も「拍番号」で書かれた、素材ゼロのモーショングラフィックス。">
+<meta property="og:url" content="https://aicu.ai/media/demo/Opus5.5-motion-graphics/">
+<meta property="og:image" content="https://aicu.ai/media/demo/Opus5.5-motion-graphics/assets/og.jpg">
+<meta property="og:locale" content="ja_JP">
+<meta property="og:site_name" content="AICU media">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#07070B">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Dela+Gothic+One&family=JetBrains+Mono:wght@500&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "ついに\"リズム感\"を手に入れた Opus5.5にモーショングラフィックスを作らせてみた！",
+  "description": "素材ファイルゼロ、HTMLとPythonのコードだけで15秒・900コマのモーショングラフィックスと音楽を生成した実験の記録。",
+  "image": "https://aicu.ai/media/demo/Opus5.5-motion-graphics/assets/og.jpg",
+  "datePublished": "2026-09-27",
+  "dateModified": "2026-09-27",
+  "inLanguage": "ja",
+  "author": {"@type": "Person", "name": "白井暁彦", "alternateName": "Akihiko Shirai"},
+  "publisher": {"@type": "Organization", "name": "AICU Japan株式会社", "url": "https://aicu.ai/"},
+  "mainEntityOfPage": "https://aicu.ai/media/demo/Opus5.5-motion-graphics/",
+  "about": ["Claude Opus 5.5", "モーショングラフィックス", "プロシージャル音楽", "Canvas", "ffmpeg"]
+}
+</script>
+<style>
+:root{
+  --ink:#07070B; --paper:#F2F2EE; --cobalt:#1B2FD6; --yellow:#F5E23A; --pink:#FF3E8A; --grey:#5B5B66;
+  --rule:rgba(242,242,238,.16); --text:#E4E4EA; --muted:#A3A3AE; --link:#9DAEFF;
+  --display:"Dela Gothic One","Zen Kaku Gothic New",sans-serif;
+  --latin:"Anton","Arial Narrow",sans-serif;
+  --body:"Zen Kaku Gothic New","Hiragino Sans","Noto Sans JP",sans-serif;
+  --code:"JetBrains Mono","SFMono-Regular",Consolas,monospace;
+  --measure:40em;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%; scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--ink);color:var(--text);font:400 17px/1.95 var(--body);
+  padding-bottom:env(safe-area-inset-bottom,0px);font-feature-settings:"palt" 0}
+a{color:var(--link);text-underline-offset:.2em}
+a:focus-visible,button:focus-visible{outline:3px solid var(--pink);outline-offset:3px}
+img,video,iframe{max-width:100%;display:block}
+
+/* ---------- ヒーロー：映像と拍タイムライン ---------- */
+.hero{background:var(--ink);color:var(--paper);padding:calc(env(safe-area-inset-top,0px) + 20px) 0 0}
+.masthead{max-width:1200px;margin:0 auto;padding:0 24px;display:flex;justify-content:space-between;align-items:baseline;font-size:14px;color:#B9B9C4}
+.masthead a{color:var(--paper);text-decoration:none;font-weight:700}
+.hero h1{max-width:1200px;margin:28px auto 8px;padding:0 24px;font:400 clamp(30px,5.4vw,68px)/1.25 var(--display);letter-spacing:.01em}
+.hero h1 .en{font-family:var(--latin);letter-spacing:.02em}
+.byline{max-width:1200px;margin:0 auto 28px;padding:0 24px;color:#B9B9C4;font-size:14px}
+.stage{max-width:1200px;margin:0 auto;padding:0 24px}
+.stage video{width:100%;aspect-ratio:16/9;background:#000}
+.beats{position:relative;margin:14px 0 0;padding-bottom:36px}
+.beats-row{display:grid;grid-template-columns:repeat(32,1fr);gap:2px;height:30px}
+.beats-row span{background:#1D1D26}
+.beats-row span.bar{background:#2B2B38}
+.scenes{position:relative;height:40px;margin-top:6px}
+.scenes button{position:absolute;top:0;height:40px;border:0;border-left:2px solid var(--yellow);background:none;color:var(--paper);
+  font:500 12px/1.2 var(--code);text-align:left;padding:2px 6px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scenes button:hover{background:rgba(245,226,58,.12)}
+.scenes button[data-silence]{border-left-color:var(--pink);min-width:8px;padding:0}
+.playhead{position:absolute;top:-4px;height:38px;width:2px;background:var(--pink);left:0;pointer-events:none}
+@media (max-width:640px){.scenes button{font-size:10px;padding:2px 3px}}
+.beats-caption{font-size:13px;color:#9D9DA8;margin:0;padding-bottom:28px}
+
+/* ---------- 本文 ---------- */
+main{padding:56px 24px 40px}
+.prose{max-width:var(--measure);margin:0 auto}
+.lead{font-size:19px;line-height:2;font-weight:700;margin:0 0 2em}
+h2{font:400 clamp(28px,4.4vw,44px)/1.35 var(--display);color:#fff;margin:2.6em 0 .8em;padding-top:.7em;border-top:6px solid var(--yellow)}
+h3{font-size:21px;color:var(--yellow);margin:2.2em 0 .5em}
+p{margin:0 0 1.3em}
+strong{color:#fff;background:linear-gradient(transparent 62%,rgba(245,226,58,.32) 62%)}
+code{font:500 .88em var(--code);background:rgba(255,255,255,.09);padding:.1em .35em;border-radius:3px}
+pre{margin:1.4em 0 1.8em;background:#15151D;color:#E9E9F0;padding:18px 20px;overflow-x:auto;border-radius:0 6px 6px 0;border-left:6px solid #4A5CFF;
+  font:500 14px/1.7 var(--code)}
+pre code{background:none;padding:0;font-size:inherit}
+pre .c{color:#8C8CA0} pre .k{color:var(--yellow)} pre .n{color:#FF8CBB}
+figure{margin:2em 0}
+.wide{max-width:960px;margin-left:50%;transform:translateX(-50%);width:calc(100vw - 48px)}
+figure img{width:100%;height:auto;background:#000}
+figcaption{font-size:14px;color:var(--muted);margin-top:.6em;line-height:1.7}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:640px){.pair{grid-template-columns:1fr}}
+table{border-collapse:collapse;width:100%;font-size:15px;margin:1.2em 0 2em}
+.table-wrap{overflow-x:auto}
+th,td{border-bottom:1px solid var(--rule);padding:.55em .6em;text-align:left;vertical-align:top}
+th{font-weight:700;white-space:nowrap}
+td.num{font-family:var(--code);white-space:nowrap}
+.note{border-left:6px solid var(--pink);padding:.2em 0 .2em 1em;margin:1.8em 0}
+.src{font-size:13px;color:var(--muted);margin:-1.2em 0 1.8em}
+ul{margin:0 0 1.3em;padding-left:1.4em} li{margin:.3em 0}
+
+/* ライブデモ（クリックで起動） */
+.demo{position:relative;aspect-ratio:16/9;background:var(--cobalt) center/cover;overflow:hidden}
+.demo button{position:absolute;inset:0;width:100%;border:0;background:rgba(7,7,11,.35);color:var(--paper);cursor:pointer;
+  font:400 clamp(20px,3vw,30px)/1.4 var(--display)}
+.demo button small{display:block;font:400 14px/1.6 var(--body);opacity:.85;margin-top:.4em}
+.demo iframe{width:100%;height:100%;border:0}
+
+.dl{display:inline-block;background:var(--yellow);color:var(--ink);text-decoration:none;padding:.7em 1.2em;font-weight:700;margin:.4em 0 1.2em}
+.dl:hover{background:var(--pink);color:var(--ink)}
+
+.author{max-width:var(--measure);margin:64px auto 0;padding:28px 0 0;border-top:1px solid var(--rule);font-size:15px;line-height:1.85;color:#C9C9D2}
+.author b{font-size:17px}
+footer{background:#000;border-top:1px solid var(--rule);color:#9D9DA8;font-size:13px;padding:28px 24px calc(28px + env(safe-area-inset-bottom,0px));text-align:center;margin-top:64px}
+footer a{color:var(--paper)}
+
+@media (prefers-reduced-motion:reduce){ *{scroll-behavior:auto!important} }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="masthead"><a href="https://aicu.ai/media/">AICU media</a><span>demo / 2026年9月27日</span></div>
+  <h1>ついに“リズム感”を手に入れた <span class="en">Opus5.5</span>にモーショングラフィックスを作らせてみた！</h1>
+  <p class="byline">文・白井暁彦（AICU）</p>
+  <div class="stage">
+    <video id="film" src="assets/opus55-motion.mp4" poster="assets/move.jpg" controls muted playsinline loop preload="metadata"
+      aria-describedby="beats-caption"></video>
+    <div class="beats" aria-label="32拍のタイムライン">
+      <div class="beats-row" id="beatsRow" aria-hidden="true"></div>
+      <div class="scenes" id="scenes"></div>
+      <div class="playhead" id="playhead"></div>
+    </div>
+    <p class="beats-caption" id="beats-caption">下の帯は32拍ぶんの小節線です。場面名を押すと、その拍から再生します。音を出すには動画の音量ボタンを押してください。</p>
+  </div>
+</header>
+
+<main>
+<article class="prose">
+
+<p class="lead">15秒、900コマ、素材ファイルはゼロ。画像も音源も使わず、HTMLとPythonのコードだけで、映像と音楽がぴったり噛み合ったモーショングラフィックスができあがりました。作ったのは Claude Opus 5.5 です。</p>
+
+<p>見てのとおり、キックが鳴り始める瞬間に文字が入り、小節の頭で場面が切り替わり、爆発の直前には一瞬の無音があります。人間の編集者がタイムライン上で合わせたように見えますが、<strong>タイミングを手で合わせる作業は一度もしていません</strong>。この記事では、そのしくみをコードを引用しながら解説します。</p>
+
+<h2>どう頼んだのか</h2>
+
+<p>先に、別のセッションで Opus 5.5 に「どうやって作ったのか」を説明させた文章がありました。「index.html で絵を描き、render.py で900コマを撮り、make_audio.py で音楽を計算で作り、最後に合体する」という全体像と、拍・イージング・粒子・音作りの考え方を、非エンジニア向けにまとめたものです。</p>
+
+<p>その文章を渡したうえで、依頼はひとことだけ。「Opus5.5でコード生成してみて」。</p>
+
+<p>Opus 5.5 は、映像の index.html、書き出しの render.py、音楽の make_audio.py、一括実行の build.sh の4本を書きました。さらに、Claude の作業環境（コード実行つきのチャット）で実際に書き出しを実行し、コマを並べた確認用の一覧画像を自分で見て、見つけた不具合を直してから動画を渡してきました。この「自分で見て直す」過程は、あとの節で紹介します。</p>
+
+<h2>「リズム感」の正体は、拍の表</h2>
+
+<p>タイトルに「リズム感」と書いたのは、テンポの取り方が最初から音楽家の発想になっていたからです。コードの冒頭はこうなっています。</p>
+
+<pre><code><span class="k">const</span> BPM = <span class="n">128</span>, BEAT = <span class="n">60</span> / BPM, BEATS = <span class="n">32</span>, FPS = <span class="n">60</span>;
+<span class="c">// 128BPM × 32拍 = 15秒。60fps なら 900コマ</span></code></pre>
+
+<p>128BPM では1拍が0.46875秒で、32拍（8小節）でちょうど15秒になります。15秒という尺が先にあったのではなく、「8小節の曲」として尺が決まっているわけです。映像の中身は、時刻を拍に換算した値 <code>b</code> で分岐しています。</p>
+
+<pre><code><span class="k">const</span> b = t / BEAT;           <span class="c">// 秒 → 拍</span>
+<span class="k">if</span> (b &lt; <span class="n">4</span>)  { <span class="c">/* 点が拍を刻み、線が伸びる */</span> }
+<span class="k">else if</span> (b &lt; <span class="n">8</span>)  { <span class="c">/* 4拍目で MOVE が滑り込む */</span> }
+<span class="k">else if</span> (b &lt; <span class="n">16</span>) { <span class="c">/* 丸→四角→三角→星 */</span> }
+<span class="c">// …28拍目で爆発</span></code></pre>
+
+<p>そして音楽側の Python も、同じ拍番号で書かれています。</p>
+
+<pre><code><span class="k">for</span> b <span class="k">in</span> range(<span class="n">4</span>, <span class="n">28</span>):          <span class="c"># 4拍目から4つ打ちのキック</span>
+    add(kick_bus, b, kick(), gain=<span class="n">0.9</span>)
+add(bus, <span class="n">24</span>, whoosh(<span class="n">3.75</span>), gain=<span class="n">0.8</span>) <span class="c"># 爆発へ向けて上がっていく音</span></code></pre>
+
+<p>映像と音が「4拍目」「28拍目」という同じ番号を参照しているので、ずれる余地がそもそもありません。全体の構成は次のとおりです。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>拍</th><th>映像</th><th>音</th></tr></thead>
+<tbody>
+<tr><td class="num">0–4</td><td>点が拍ごとに脈打ち、線が伸びる</td><td>拍ごとの電子音、「シュッ」</td></tr>
+<tr><td class="num">4–8</td><td>MOVE が滑り込む</td><td>キック開始、和音 Am</td></tr>
+<tr><td class="num">8–16</td><td>SHAPE／RHYTHM、図形が変形</td><td>ハット、13拍目から1拍おきにスネア</td></tr>
+<tr><td class="num">16–20</td><td>グラフエディタ</td><td>和音 G</td></tr>
+<tr><td class="num">20–24</td><td>トンネル</td><td>和音 Am</td></tr>
+<tr><td class="num">24–27.75</td><td>ワイヤーの立方体、26拍目からグリッチが強まる</td><td>上昇していくノイズ</td></tr>
+<tr><td class="num">27.75–28</td><td>真っ黒</td><td>完全な無音（約0.12秒）</td></tr>
+<tr><td class="num">28–32</td><td>爆発し、粒子が CLAUDE に集まる</td><td>大きなキックとクラッシュ</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>動きの気持ちよさは、数行の数式</h2>
+
+<p>文字が「スッと入ってピタッと止まる」感じは、0から1へ進む割合を数式で曲げて作っています。モーションデザインの世界でイージング（緩急）と呼ばれるものです。</p>
+
+<pre><code>expoOut:   t =&gt; t &gt;= <span class="n">1</span> ? <span class="n">1</span> : <span class="n">1</span> - Math.pow(<span class="n">2</span>, <span class="n">-10</span> * t),   <span class="c">// 速く入って、ゆっくり止まる</span>
+backOut:   t =&gt; { <span class="k">const</span> c1 = <span class="n">1.70158</span>, c3 = c1 + <span class="n">1</span>;
+                  <span class="k">return</span> <span class="n">1</span> + c3 * (t-<span class="n">1</span>)**<span class="n">3</span> + c1 * (t-<span class="n">1</span>)**<span class="n">2</span>; }, <span class="c">// 少し行き過ぎて戻る</span>
+bounceOut: t =&gt; { <span class="c">/* 4区間の放物線で跳ねを表す */</span> }</code></pre>
+
+<p>MOVE には expo、SHAPE には back、RHYTHM には bounce と、言葉の意味に合った動きが割り当てられています。16〜20拍目では、この緩急の曲線そのものをグラフエディタ風に描いて見せます。After Effects などでモーションを作っている人が毎日さわる画面なので、分かる人ほど「おっ」となるはずです。</p>
+
+<figure class="wide">
+  <img src="assets/graph.jpg" alt="3つのグラフに expo.out、back.out、bounce.out の曲線が描かれ、再生ヘッドの位置で四角が動いている" width="1600" height="900" loading="lazy">
+  <figcaption>16〜20拍目。曲線上の点と、その値で横に動く四角が同じ拍で同期している</figcaption>
+</figure>
+
+<h2>変形、奥行き、5,000個の粒子</h2>
+
+<h3>丸→四角→三角→星</h3>
+
+<p>形の変形は、どの図形も「周囲を240個の点で表す」ことで実現しています。四角や星は辺の長さに沿って等間隔に240点を打ち直し、出発点を真上にそろえます。あとは同じ番号の点どうしを少しずつ動かすだけで、形が別の形へなめらかに移ります。変形中に見えるピンクの細線は、その対応関係をそのまま描いたものです。</p>
+
+<h3>3Dライブラリなしの奥行き</h3>
+
+<p>トンネルと立方体は、3Dのライブラリを使っていません。「遠いものほど小さく描く」という遠近法の計算を自前で書いています。立方体なら、8つの頂点を回転させてから次の一行で画面上の位置に直しています。</p>
+
+<pre><code><span class="k">const</span> k = <span class="n">900</span> / (<span class="n">900</span> + z + <span class="n">600</span>);  <span class="c">// 奥にある点ほど k が小さい＝小さく描く</span></code></pre>
+
+<figure class="wide pair">
+  <img src="assets/shape.jpg" alt="黄色い背景に SHAPE の文字と、変形途中の青い図形" width="1600" height="900" loading="lazy">
+  <img src="assets/tunnel.jpg" alt="回転しながら奥へ続く四角形のトンネルと DEPTH の文字" width="1600" height="900" loading="lazy">
+  <figcaption>左：変形の途中（10拍目付近）。右：遠近法を自前で計算したトンネル</figcaption>
+</figure>
+
+<h3>文字の形に集まる粒子</h3>
+
+<p>最後の CLAUDE は、画面に見えないキャンバスに一度文字を描き、その文字の部分にあたる画素を拾って約5,000個の目標点にしています。粒子は28拍目で中心から爆発し、少しずつ時間差をつけて目標点へ集まります。乱数には毎回同じ並びを返す関数を使っているので、何度書き出しても同じ粒子が同じ動きをします。</p>
+
+<figure class="wide">
+  <img src="assets/claude.jpg" alt="黒い背景に、細かい粒子で描かれた CLAUDE の文字" width="1600" height="900" loading="lazy">
+  <figcaption>最終コマ。約5,000個の粒子で文字の形を作っている</figcaption>
+</figure>
+
+<h2>「映像っぽさ」を足す仕上げ</h2>
+
+<p>ここまでの絵はくっきりしすぎていて、そのままではCGの画面に見えます。映像らしさを出すために、4つの処理を重ねています。</p>
+
+<p><strong>モーションブラー</strong>は、1コマの中で時刻をほんの少しずつずらして10回描き、平均しています。平均の取り方は「i 枚目を 1/(i+1) の濃さで重ねる」というもので、途中の合計を保持しなくても最終的に全部の平均になります。</p>
+
+<pre><code><span class="k">for</span> (<span class="k">let</span> i = <span class="n">0</span>; i &lt; SUB; i++) {
+  scene(bctx, t_i);                          <span class="c">// 少しずつずれた時刻で描く</span>
+  actx.globalAlpha = <span class="n">1</span> / (i + <span class="n">1</span>);           <span class="c">// 逐次平均</span>
+  actx.drawImage(buf, <span class="n">0</span>, <span class="n">0</span>);
+}</code></pre>
+
+<p><strong>グリッチ</strong>は、赤の成分を右へ、青の成分を左へずらし、さらに画面を横に何本か切ってずらしています。場面の変わり目で一瞬だけかかり、26拍目からは爆発に向けて強まっていきます。<strong>フィルムの粒子</strong>は薄いノイズ画像を毎コマ違う位置に重ねたもの、<strong>周辺の暗さ</strong>は放射状のグラデーションです。</p>
+
+<p>四隅のタイムコードや拍カウンターは「差の絶対値」で重ねる合成（difference）で描いているため、黒・青・黄色のどの背景に切り替わっても読めます。ただし、背景が中間のグレーに近いと文字も灰色になって読みにくくなるので、万能ではありません。</p>
+
+<figure class="wide">
+  <img src="assets/cube.jpg" alt="青い背景で回転する2重のワイヤーフレーム立方体。赤と青に色がずれ、画面が横に切れてずれている" width="1600" height="900" loading="lazy">
+  <figcaption>27拍目付近。グリッチが最大に近づいていく</figcaption>
+</figure>
+
+<h2>音楽も、波の計算で作っている</h2>
+
+<p>音声ファイルも、サンプル音源を一切使わずに作っています。</p>
+
+<p><strong>キック</strong>は「高いところから一瞬で下がる低音」です。周波数を時間とともに指数関数で下げるだけで、ドンという音になります。</p>
+
+<pre><code>f = <span class="n">44</span> + <span class="n">150</span> * np.exp(-t * <span class="n">32</span>)            <span class="c"># 194Hz から 44Hz へ急降下</span>
+s = np.sin(<span class="n">2</span> * np.pi * np.cumsum(f) / SR) * np.exp(-t * <span class="n">9</span>)</code></pre>
+
+<p><strong>ハットやスネア、「シュッ」という効果音</strong>は、ザーッという雑音から不要な帯域を削って形を整えたものです。<strong>和音</strong>は、ほんの少しずつ音程をずらしたノコギリ波を7本重ねる「スーパーソー」で、Am→F→C→G と進みます。左右で波の位相を変えているので、ヘッドホンで聴くと音が横に広がります。</p>
+
+<p>クラブ音楽らしいうねりを出しているのが<strong>サイドチェイン</strong>です。キックが鳴るたびに、それ以外の音を一瞬だけ小さくしています。</p>
+
+<pre><code>duck = <span class="n">1</span> - <span class="n">0.75</span> * np.exp(-since / <span class="n">0.09</span>)   <span class="c"># since = 直前のキックからの経過秒</span></code></pre>
+
+<p>そして27.75拍目から28拍目まで、4分の1拍（約0.12秒）のあいだ音を完全にゼロにしています。映像も同じ区間で真っ黒になります。何もない一瞬を挟むことで、直後の爆発が大きく聞こえます。</p>
+
+<h2>書き出しのしくみ</h2>
+
+<p>render.py は、画面を持たない Chrome（Playwright 経由のヘッドレス Chromium）を裏で起動します。ページに「このコマを描いて」と頼み、返ってきた PNG 画像を、そのまま ffmpeg に流し込みます。これを900回くり返すと MP4 ができます。</p>
+
+<pre><code><span class="k">for</span> f <span class="k">in</span> range(<span class="n">900</span>):
+    url = page.evaluate(<span class="n">f"renderFrame({f})"</span>)        <span class="c"># ブラウザ側で1コマ描画 → PNG</span>
+    ffmpeg.stdin.write(base64.b64decode(url.split(<span class="n">","</span>, <span class="n">1</span>)[<span class="n">1</span>]))</code></pre>
+
+<p>ブラウザの再生速度に頼らず「何コマ目か」を指定して描かせるので、重い処理を入れてもコマ落ちしません。書き出しにかかる時間は解像度とブラーの回数でほぼ決まります。Claude の作業環境（CPU 1コア）では、960×540・ブラー3回で900コマが約110秒でした。1920×1080・ブラー10回の本番設定は、画素数が4倍、描画回数が3倍強になるので、手元のマシンで数分から十数分を見込んでください。</p>
+
+<h2>AIが自分で見つけて直したバグ</h2>
+
+<p>最初の書き出しには不具合がありました。爆発の前に強めていくグリッチの量を、Opus 5.5 は「26拍目から27.75拍目にかけて0→1」という式で書いていました。ところがこの式は27.75拍目を過ぎても1のまま張り付くため、28拍目以降も最大強度のグリッチがかかり続け、最後の CLAUDE が赤と青にずれて読めなくなっていたのです。</p>
+
+<p>Opus 5.5 は書き出した動画から十数コマを切り出して一覧画像にし、それを見てこの問題に気づきました。原因の式を特定し、「26拍目から27.75拍目のあいだだけ」という条件を1行足して修正しています。</p>
+
+<p class="note">生成されたコードは「動いたか」だけでなく「コマを並べて目で見る」検証がよく効きます。映像のように結果が画面に出るものは、確認用の一覧画像を作らせると、人もAIも見落としを見つけやすくなります。</p>
+
+<h2>ファクトチェック：「リズム感」はどこまで本当か</h2>
+
+<p>タイトルの言葉が何を指しているのかを、コードに照らして確かめておきます。</p>
+
+<h3>モデルは音を聴いていない</h3>
+
+<p>make_audio.py は音を読み込むプログラムではなく、音を<strong>書き出す</strong>プログラムです。映像と音楽は、どちらも同じ拍番号の表から作られています。音と映像が合うのは、Opus 5.5 が音を聴いて合わせたからではありません。同じ表から両方を作っているので、ずれようがないのです。</p>
+
+<p>この記事でいう「リズム感」は、時間を拍で数えて設計する発想のことです。音を聴き取る能力のことではありません。また、Opus 5.5 が作業中に確かめたのはコマを並べた<strong>画像</strong>で、音声は確かめていません。</p>
+
+<h3>拍で書く発想は、どこから来たか</h3>
+
+<p>最初に渡した説明文には、すでに「拍」の考え方が書かれていました。そのため今回の実験だけでは、Opus 5.5 が自分から拍で設計したとまでは言えません。ほかのモデルと同じ依頼で比べてもいないので、タイトルの「ついに」は筆者の実感です。検証して確かめた差ではありません。</p>
+
+<h3>テンプレートを流用していないか</h3>
+
+<p>Remotion のような動画用のフレームワークは使っていません。依存しているのは Playwright・NumPy・ffmpeg だけです。一方で、「コマ番号を指定して1コマずつ描き、画面を持たないブラウザで撮る」という書き出し方は、Remotion などと同じ考え方です。</p>
+
+<p>コードの細部には、よく知られた部品がそのまま入っています。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>部品</th><th>出どころ</th><th>一致の程度</th></tr></thead>
+<tbody>
+<tr><td>イージング（expo・back・bounce・inOutCubic）</td><td><a href="http://robertpenner.com/easing/">Robert Penner のイージング式</a>。書き方は <a href="https://github.com/ai/easings.net/blob/master/src/easings/easingsFunctions.ts">easings.net のソース</a>と同じ形</td><td>定数と変数名（<code>c1 = 1.70158</code>、<code>c3 = c1 + 1</code>、<code>7.5625</code>、<code>2.75</code>）まで一致。同じ式でも <a href="https://github.com/tweenjs/tween.js/blob/main/src/Easing.ts">tween.js</a> は変数名が違うので、easings.net の系統と分かる</td></tr>
+<tr><td>シード付き乱数 <code>rng()</code></td><td><a href="https://gist.github.com/tommyettinger/46a874533244883189143505d203312c">mulberry32</a>（Tommy Ettinger 考案、パブリックドメイン）。JavaScript 版は <a href="https://github.com/bryc/code/blob/master/jshash/PRNGs.md#mulberry32">bryc のまとめ</a>の形</td><td>定数 <code>0x6D2B79F5</code> とシフト量まで一致</td></tr>
+<tr><td>曲線の名前（expo.out など）</td><td><a href="https://gsap.com/docs/v3/Eases/">GSAP の命名</a></td><td>名前だけ</td></tr>
+<tr><td>モーションブラー（1コマを何回も描いて平均、シャッター角）</td><td>Processing の GIF 作家 beesandbombs の<a href="https://beesandbombs.tumblr.com/post/65346867831/motion-blur-for-processing">モーションブラーのテンプレート</a>（<a href="https://bleuje.com/tutorial6/">解説</a>）と同じ考え方</td><td>考え方と「シャッター角」という変数の役割が一致</td></tr>
+<tr><td>文字の画素から粒子を作る</td><td><a href="https://www.mamboleoo.be/articles/how-to-convert-an-image-into-particles">Mamboleoo のチュートリアル</a>など</td><td>「不透明度が128を超える画素を拾う」という判定まで一致</td></tr>
+<tr><td>形の変形（周長を等分した点どうしを補間）</td><td><a href="https://github.com/veltman/flubber">flubber</a>、GSAP の <a href="https://gsap.com/docs/v3/Plugins/MorphSVGPlugin/">MorphSVG</a> と同じ問題の、最も素朴な解き方</td><td>考え方だけ</td></tr>
+<tr><td>赤青のずれ、フィルム粒子、周辺減光</td><td>three.js の <a href="https://github.com/mrdoob/three.js/blob/dev/examples/jsm/shaders/RGBShiftShader.js">RGBShift</a>・<a href="https://github.com/mrdoob/three.js/blob/dev/examples/jsm/postprocessing/GlitchPass.js">GlitchPass</a>・<a href="https://github.com/mrdoob/three.js/blob/dev/examples/jsm/shaders/FilmShader.js">Film</a>・<a href="https://github.com/mrdoob/three.js/blob/dev/examples/jsm/shaders/VignetteShader.js">Vignette</a> など、定番のポストエフェクト</td><td>考え方だけ。Canvas 2D で書き直している</td></tr>
+<tr><td>キック、スネア、ハット</td><td>Sound On Sound の連載 Synth Secrets（<a href="https://www.soundonsound.com/techniques/synthesizing-drums-bass-drum">バスドラム</a>、<a href="https://www.soundonsound.com/techniques/synthesizing-drums-snare-drum">スネア</a>）、<a href="https://dev.opera.com/articles/drum-sounds-webaudio/">Web Audio でのドラム合成</a></td><td>考え方だけ。コードは独自</td></tr>
+<tr><td>スーパーソー</td><td>Roland JP-8000。Adam Szabo の<a href="https://adamszabo.com/internet/adam_szabo_how_to_emulate_the_super_saw.pdf">解析論文</a></td><td>「7本のノコギリ波」という本数だけ一致。ずらし幅は独自</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>この作例に固有の行（拍区間を0〜1に直す <code>prog()</code>、拍ごとの脈動 <code>pulse()</code>、<code>glitchAmount()</code>、サイドチェインの式など）を GitHub のコード検索にかけましたが、一致するものはありませんでした（2026年9月27日）。GitHub のコード検索は公開リポジトリの既定ブランチしか対象にしないので、これで「元になった作品が存在しない」とまでは言えません。</p>
+
+<p>まとめると、この作例は1本のテンプレートを流用したものではありません。何十年も使われてきた定番の部品を、「拍の表」という骨組みに組み立てたものです。部品の数式は昔からあります。新しいのは組み立て方と、15秒の中への割り振りです。</p>
+
+<p>「HTML で描いて動画に書き出す」という枠組みそのものにも、よく知られた先行例があります。<a href="https://github.com/remotion-dev/remotion">Remotion</a>（React）、<a href="https://github.com/motion-canvas/motion-canvas">Motion Canvas</a>、<a href="https://github.com/spite/ccapture.js">CCapture.js</a>、<a href="https://github.com/tungs/timecut">timecut</a>、<a href="https://github.com/mattdesl/canvas-sketch">canvas-sketch</a> などです。いちばん近いのは、HeyGen が Apache-2.0 で公開している <a href="https://github.com/heygen-com/hyperframes">hyperframes</a>（“Write HTML. Render video. Built for agents.”）でしょう。AI エージェントに HTML で動画を書かせる前提で作られており、<a href="https://github.com/heygen-com/hyperframes/blob/main/packages/core/src/beats/beatDetection.ts">曲の拍の検出</a>や、<a href="https://github.com/heygen-com/hyperframes/blob/main/packages/engine/src/services/motionBlur.ts">After Effects 方式のモーションブラー</a>も備えています。ただし、hyperframes のエージェント向け指示書でいう <a href="https://github.com/heygen-com/hyperframes/blob/main/skills/hyperframes-creative/references/beat-direction.md">beat</a> は主に「場面」の意味で、音楽の拍とは別物です。今回のコードは、こうしたフレームワークを1つも読み込まずに同じことを数百行で書いています。</p>
+
+<h3>数式は線形だけではない</h3>
+
+<p>コード中の「動きを決める式」を形で分けると、次のようになります。直線的に動くもの（線形）は、実は少数派です。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>式の形</th><th>コード中の例</th><th>効き方</th></tr></thead>
+<tbody>
+<tr><td>線形</td><td><code>lerp(a, b, t)</code>、拍区間を0〜1に直す <code>prog()</code></td><td>すべての動きの「進み具合」の土台。これを下の式で曲げる</td></tr>
+<tr><td>逆数</td><td>立方体の遠近 <code>900 / (900 + z + 600)</code>、トンネル <code>f / (z * 60)</code>、ブラーの逐次平均 <code>1 / (i + 1)</code></td><td>遠いほど小さい。奥行きは逆数で作られている</td></tr>
+<tr><td>指数</td><td><code>expoOut</code>、拍の脈動 <code>exp(-frac(b) * 6)</code>、キックの音程 <code>44 + 150 * exp(-t * 32)</code>、サイドチェイン <code>1 - 0.75 * exp(-since / 0.09)</code></td><td>「ドン」と立ち上がってすっと減る。打楽器と動きの減衰が同じ形をしている（<a href="https://iquilezles.org/articles/functions/">Inigo Quilez の小さな関数集</a>にある impulse と同じ発想）</td></tr>
+<tr><td>多項式</td><td><code>backOut</code>（3次）、<code>inOutCubic</code>、上昇ノイズの音量 <code>u ** 2</code>、グリッチの強まり <code>prog(...) ** 2</code></td><td>行き過ぎて戻る、じわじわ加速する</td></tr>
+<tr><td>区分的な放物線</td><td><code>bounceOut</code>（4区間）</td><td>跳ねるたびに低く、間隔も短くなる。After Effects の式で有名な <a href="http://www.motionscript.com/articles/bounce-and-overshoot.html">Dan Ebberts の解説</a>が、バウンスを「減衰する正弦波」ではなく放物線の列で作る理由を説明している</td></tr>
+<tr><td>飽和</td><td><code>tanh(mix * 1.3)</code>、<code>clamp()</code></td><td>音を柔らかく潰す、値をはみ出させない</td></tr>
+<tr><td>周波数応答</td><td>ローパス <code>1 / sqrt(1 + (f / fc) ** 4)</code></td><td>2次の<a href="https://en.wikipedia.org/wiki/Butterworth_filter">バターワース特性</a>の振幅そのもの。逆数とべきの組み合わせ</td></tr>
+<tr><td>べき（対数スケール）</td><td>音名から周波数 <code>440 * 2 ** ((n - 69) / 12)</code>（<a href="https://en.wikipedia.org/wiki/MIDI_tuning_standard">MIDI の標準式</a>）、マスター音量 <code>10 ** (-1 / 20)</code></td><td>人の耳が対数で聞くことに合わせる</td></tr>
+<tr><td>三角関数</td><td>立方体・トンネルの回転、揺れ</td><td>回転と周期的な揺れ</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>ブラウザで動かしてみる</h2>
+
+<p>記事に使った index.html は、ブラウザ上でもリアルタイムに再生できます。下のボタンで起動すると、画質を下げたプレビューが始まります。画面をクリックすると音楽つきで頭から再生します。</p>
+
+<div class="demo wide" style="background-image:url(assets/move.jpg)" id="demo">
+  <button type="button" id="demoStart">ライブデモを起動する<small>処理が重いため、スマートフォンではカクつく場合があります</small></button>
+</div>
+
+<h2>手元で書き出すには</h2>
+
+<p>4本のファイルをまとめてダウンロードできます。Python 3 と ffmpeg が入っていれば、次のコマンドで本番画質の動画ができます。</p>
+
+<a class="dl" href="source/opus55-motion-source.zip" download>ソース一式（zip）をダウンロード</a>
+
+<pre><code>pip install playwright numpy
+playwright install chromium
+./build.sh                          <span class="c"># 1920×1080・ブラー10回 → final.mp4</span>
+./build.sh --scale 0.5 --sub 3      <span class="c"># まず試すなら軽い設定で</span></code></pre>
+
+<p>文字は Google Fonts の Anton と JetBrains Mono を読み込んでいます。ネットワークにつながっていない環境では代わりのフォントで描かれ、CLAUDE の粒子の形も少し変わります。</p>
+
+<h2>手持ちの曲に合わせるなら：JIZURA との違い</h2>
+
+<p>この作例は、手持ちの MP3 には合わせられません。音楽を作る側のプログラムで、テンポは128BPMに固定され、拍の位置は計算で決まります。曲を読み込む処理がそもそもありません。</p>
+
+<p>既存の曲に合わせるには、曲の中から拍を見つける処理が必要です。それを備えている例に、hakoniwa 氏が MIT ライセンスで公開している <a href="https://852wa.github.io/JIZURA/">JIZURA（字面）</a>があります。歌詞を入れると文字PV（リリックモーション）を組み立てるブラウザアプリです。曲を読み込むと拍を検出し、カットの切れ目を拍に寄せます。</p>
+
+<p>JIZURA の拍検出は、曲を1秒50コマに区切って高音寄りの音量の立ち上がりを拾います。その立ち上がりが何秒おきに繰り返されるかを 70〜180BPM の範囲で調べ（自己相関）、テンポと1拍目の位置を決めています。テンポを決める部分を引用します。</p>
+
+<pre><code><span class="c">// tempo via autocorrelation (70..180 BPM)</span>
+<span class="k">for</span> (let lag = minLag; lag &lt;= maxLag; lag++) {
+  let s = <span class="n">0</span>; <span class="k">for</span> (let f = lag; f &lt; n; f++) s += onset[f] * onset[f - lag];
+  const bpm = <span class="n">60</span> * rate / lag;
+  const w = Math.exp(<span class="n">-0.5</span> * Math.pow(Math.log2(bpm / <span class="n">125</span>) / <span class="n">0.7</span>, <span class="n">2</span>));
+  s *= w; scores[lag] = s;
+  <span class="k">if</span> (s &gt; best) { best = s; bestLag = lag; }
+}</code></pre>
+<p class="src">出典：<a href="https://github.com/852wa/JIZURA/blob/main/src/10_audio.js">852wa/JIZURA src/10_audio.js</a>（© 2026 hakoniwa、MIT License）</p>
+
+<p>注目したいのは <code>w</code> の行です。見つかった周期に「125BPM からどれだけ離れているか」で重みをかけています。これは、Dan Ellis の論文 <a href="https://www.ee.columbia.edu/~dpwe/pubs/Ellis07-beattrack.pdf">“Beat Tracking by Dynamic Programming”（2007）</a>の式(6)と同じ形です。この論文は、人がテンポを感じるときには 120BPM 前後に偏りがあるとして、対数の時間軸でガウス分布の重みをかけています。音楽解析ライブラリ librosa の <a href="https://librosa.org/doc/0.10.2/generated/librosa.beat.beat_track.html"><code>beat_track</code></a> が <code>start_bpm=120</code> を既定値に持つのも同じ系譜です。1拍の周期は、半分や倍の周期でも同じくらい強く相関が出ます。そのどれを採るかを、「たぶんこのくらいのテンポだろう」という仮説で決めているわけです。</p>
+
+<p>求まるのは一定間隔の拍の並びです。テンポが揺れる曲は、手動のタップ同期や、LRC 形式のタイムスタンプで補う作りになっています。</p>
+
+<h3>BPM は決めうちか、仮説か</h3>
+
+<p>ここで、両者の立場がはっきり分かれます。</p>
+
+<ul>
+<li><strong>この作例は BPM の決めうち</strong>です。<code>BPM = 128</code> と書き、曲のほうをそれに合わせて作ります。推定も仮説もありません。</li>
+<li><strong>JIZURA は仮説つきの推定</strong>です。曲は与えられたもので、そのテンポを「125BPM 前後だろう」という事前の仮説のもとで推定します。</li>
+</ul>
+
+<p>モデルが音を聴いていないということは、裏を返せば、拍の時刻さえ分かれば<strong>どんな曲にも同じ設計が使える</strong>ということです。拍の時刻の手に入れ方は、曲の素性によって3通りあります。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>曲の素性</th><th>拍の時刻の手に入れ方</th><th>ずれの心配</th></tr></thead>
+<tbody>
+<tr><td>BPM が分かっている（打ち込み曲、クリックに合わせて録った曲、ストック音源の表記など）</td><td>BPM と1拍目の位置を書くだけ。JIZURA の <code>beatGrid(bpm, offset, duration)</code> と同じ計算</td><td>ほぼない。1拍目の位置合わせだけ</td></tr>
+<tr><td>MIDI がある</td><td>MIDI のテンポ情報から拍の時刻を計算する（Python の <a href="https://github.com/craffel/pretty-midi">pretty_midi</a> の <code>get_beats()</code>、JavaScript の <a href="https://github.com/Tonejs/Midi">@tonejs/midi</a> など）</td><td>ない。途中でテンポが変わる曲にも対応できる</td></tr>
+<tr><td>MP3 などの音声しかない</td><td>拍を推定する（JIZURA、<a href="https://librosa.org/doc/0.10.2/generated/librosa.beat.beat_track.html">librosa</a>、<a href="https://github.com/CPJKU/madmom">madmom</a>、<a href="https://aubio.org/">aubio</a>、<a href="https://essentia.upf.edu/reference/std_RhythmExtractor2013.html">Essentia</a>、ブラウザなら <a href="https://github.com/chrisguttandin/web-audio-beat-detector">web-audio-beat-detector</a>、<a href="https://github.com/tornqvist/bpm-detective">bpm-detective</a> など）</td><td>推定しだい。倍・半分のテンポに読み違える、テンポの揺れについていけない、などが起きうる</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th></th><th>この作例</th><th>JIZURA</th></tr></thead>
+<tbody>
+<tr><th>音</th><td>コードで作る（出力）</td><td>手持ちの曲を読み込む（入力）</td></tr>
+<tr><th>拍の決め方</th><td>128BPM と書く</td><td>曲から自動検出、BPM の手入力、タップ同期</td></tr>
+<tr><th>ずれない理由</th><td>同じ表から音と映像を作るので、しくみ上ずれない</td><td>検出の精度しだい。テンポが揺れる曲では一定間隔の拍とずれうる</td></tr>
+<tr><th>演出</th><td>この1本のために書いた専用のコード</td><td>707の部品と24のスタイルを組み合わせ、シードを変えるたびに別の構成になる</td></tr>
+<tr><th>向いている用途</th><td>尺も音も自分で作るジングル、オープニング</td><td>既存の曲の歌詞動画</td></tr>
+<tr><th>書き出し</th><td>ヘッドレス Chromium → ffmpeg</td><td>ブラウザ内（WebCodecs）で MP4</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>おもしろいことに、JIZURA も mulberry32 の乱数と、Penner 系のバウンスの式（<code>7.5625</code>、<code>2.75</code>）を使っています。どちらも同じ定番の部品箱から組み立てられている、ということです。JIZURA のリポジトリが作られたのは2026年9月23日で、この記事の数日前です。同じ時期に、まったく違うアプローチで「拍に合わせて動く文字や図形」を作っている人がいます。筆者自身も含めて、こうした道具を作っている人は少なくありません。</p>
+
+<p>この作例を手持ちの曲で動かすなら、上の3通りのどれかで拍の時刻の並びを求めます。そのうえで、<code>b = t / BEAT</code> の1行を「時刻 → 拍番号」の変換（拍の時刻の並びから補間する）に置き換えれば、場面の分岐はそのまま使えるはずです。make_audio.py は要らなくなります。これはまだ試しておらず、見通しです。</p>
+
+<h2>拍の表を書き換えれば、別の映像になる</h2>
+
+<p>この作例のいちばんの価値は、映像そのものより「拍の表」という設計にあると考えています。場面の分岐と文字、和音の進行を書き換えれば、イベントのオープニング、スポンサー紹介のバンパー、番組のジングルなどを、同じしくみで何本でも作れます。BPM を変えれば尺も自動で変わり、音と映像は常にそろったままです。</p>
+
+<p>AICU では、こうした「コードで作る映像と音」を、クリエイター向けの講座や制作の現場で使える形にしていきます。今回のソースを使って何か作ったら、ぜひ見せてください。</p>
+
+</article>
+
+<aside class="author">
+  <b>白井暁彦（しらい・あきひこ）</b><br>
+  AICU Inc. CEO／AICU Japan株式会社 代表取締役。博士（工学）。専門はバーチャルリアリティ、エンターテインメントシステム、生成AI・クリエイティブAI。著書に『画像生成AI Stable Diffusionスタートガイド』『ComfyUIマスターガイド』『白井博士の未来のゲームデザイン』ほか。
+</aside>
+</main>
+
+<footer>
+  © 2026 <a href="https://aicu.ai/">AICU</a> — つくる人をつくる。作例のソースコードは記事内のリンクから入手できます。
+</footer>
+
+<script>
+(function(){
+  var BPM=128, BEAT=60/BPM, BEATS=32;
+  var video=document.getElementById('film'), row=document.getElementById('beatsRow'),
+      scenes=document.getElementById('scenes'), head=document.getElementById('playhead');
+  for(var i=0;i<BEATS;i++){var s=document.createElement('span'); if(i%4===0)s.className='bar'; row.appendChild(s);}
+  var list=[[0,'イントロ'],[4,'MOVE'],[8,'SHAPE'],[12,'RHYTHM'],[16,'グラフエディタ'],[20,'トンネル'],[24,'立方体'],[27.75,'無音'],[28,'CLAUDE']];
+  list.forEach(function(it,k){
+    var b=document.createElement('button'), end=(list[k+1]||[BEATS])[0];
+    b.type='button'; b.textContent=it[1]; b.style.left=(it[0]/BEATS*100)+'%'; b.style.width=((end-it[0])/BEATS*100)+'%';
+    b.setAttribute('aria-label', it[1]+'（'+it[0]+'拍目）から再生');
+    if(it[1]==='無音'){ b.setAttribute('data-silence',''); b.textContent=''; b.title='無音（27.75拍目）'; }
+    b.addEventListener('click',function(){ video.currentTime=it[0]*BEAT+0.001; video.play(); });
+    scenes.appendChild(b);
+  });
+  function tick(){ var d=video.duration||BEATS*BEAT; head.style.left=(video.currentTime/d*100)+'%'; if(!video.paused) requestAnimationFrame(tick); }
+  video.addEventListener('play',tick); video.addEventListener('seeked',tick); video.addEventListener('timeupdate',tick);
+  if(!matchMedia('(prefers-reduced-motion: reduce)').matches){ video.autoplay=true; video.play().catch(function(){}); }
+
+  document.getElementById('demoStart').addEventListener('click',function(){
+    var f=document.createElement('iframe');
+    f.src='demo/?scale=0.5&sub=1'; f.title='Opus 5.5 モーショングラフィックスのライブデモ'; f.allow='autoplay';
+    var box=document.getElementById('demo'); box.innerHTML=''; box.appendChild(f); f.focus();
+  });
+})();
+</script>
+</body>
+</html>

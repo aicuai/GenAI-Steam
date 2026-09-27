@@ -1,0 +1,18 @@
+// Cloudflare Workers（静的アセットのみ）。public/ のパスがそのまま URL のパスになる。
+// 例: public/media/demo/Opus5.5-motion-graphics/index.html
+//   → https://aicu.ai/media/demo/Opus5.5-motion-graphics/
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aicu-media-demo-opus55-motion",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./public",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "workers_dev": true,
+  // ▼ 本番ルート。追加・変更は必ず人間が確認してから行う（AGENTS.md「人間の確認が必要な操作」）
+  // "routes": [
+  //   { "pattern": "aicu.ai/media/demo/Opus5.5-motion-graphics*", "zone_name": "aicu.ai" }
+  // ]
+}

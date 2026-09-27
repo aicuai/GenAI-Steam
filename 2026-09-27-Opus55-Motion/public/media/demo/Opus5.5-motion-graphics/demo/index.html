@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Opus 5.5 Motion Study</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=JetBrains+Mono:wght@500&display=block" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  canvas{display:block;width:100vw;height:56.25vw;max-height:100vh;max-width:177.78vh;margin:auto;position:absolute;inset:0}
+  #hint{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);color:#fff;font:14px sans-serif;opacity:.7}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">クリックで音つき再生</div>
+<audio id="au" src="audio.wav" preload="auto"></audio>
+<script>
+/* =========================================================
+   すべてを「拍」で決める。128BPM × 32拍 = 15秒 / 60fps = 900コマ
+   ========================================================= */
+const BPM = 128, BEAT = 60 / BPM, BEATS = 32, FPS = 60;
+const DUR = BEAT * BEATS, FRAMES = Math.round(DUR * FPS);
+const W = 1920, H = 1080;                       // 論理解像度（描画はすべてこの座標）
+
+const Q = new URLSearchParams(location.search);
+const RENDER = Q.has('render');
+const SCALE = parseFloat(Q.get('scale') || '1');
+const SUB = parseInt(Q.get('sub') || (RENDER ? '10' : '2'));   // モーションブラーのサンプル数
+const SHUTTER = 0.5;                                              // 180°シャッター
+
+// パレット：コバルト / シグナルイエロー / 蛍光ピンク / 紙白 / 墨
+const C = { cobalt:'#1B2FD6', yellow:'#F5E23A', pink:'#FF3E8A', paper:'#F2F2EE', ink:'#07070B' };
+const DISPLAY = '"Anton","Arial Black","Poppins",sans-serif';
+const MONO = '"JetBrains Mono","DejaVu Sans Mono",monospace';
+
+/* ---------- 基本ユーティリティ ---------- */
+const clamp = (x,a=0,b=1)=>Math.max(a,Math.min(b,x));
+const lerp = (a,b,t)=>a+(b-a)*t;
+const prog = (b,b0,b1)=>clamp((b-b0)/(b1-b0));          // 拍区間 → 0..1
+const frac = x=>x-Math.floor(x);
+function rng(seed){ return function(){ seed|=0; seed=seed+0x6D2B79F5|0;
+  let t=Math.imul(seed^seed>>>15,1|seed); t=t+Math.imul(t^t>>>7,61|t)^t;
+  return ((t^t>>>14)>>>0)/4294967296; }; }
+
+/* ---------- イージング（緩急の数式） ---------- */
+const E = {
+  expoOut: t=>t>=1?1:1-Math.pow(2,-10*t),
+  expoIn:  t=>t<=0?0:Math.pow(2,10*t-10),
+  backOut: t=>{const c1=1.70158,c3=c1+1;return 1+c3*Math.pow(t-1,3)+c1*Math.pow(t-1,2);},
+  bounceOut: t=>{const n=7.5625,d=2.75;
+    if(t<1/d)return n*t*t; if(t<2/d)return n*(t-=1.5/d)*t+.75;
+    if(t<2.5/d)return n*(t-=2.25/d)*t+.9375; return n*(t-=2.625/d)*t+.984375;},
+  inOutCubic: t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2,
+};
+
+/* ---------- キャンバス ---------- */
+const out = document.getElementById('c');
+out.width = Math.round(W*SCALE); out.height = Math.round(H*SCALE);
+const mk = ()=>{const c=document.createElement('canvas');c.width=out.width;c.height=out.height;return c;};
+const buf = mk(), acc = mk(), tmp = mk();
+const bctx = buf.getContext('2d'), actx = acc.getContext('2d'), octx = out.getContext('2d'), tctx = tmp.getContext('2d');
+
+/* ---------- 図形：周囲を240点で表す ---------- */
+const NPTS = 240;
+function resample(verts){               // 多角形の周長を等間隔に240分割
+  const segs=[]; let total=0;
+  for(let i=0;i<verts.length;i++){const a=verts[i],b=verts[(i+1)%verts.length];
+    const l=Math.hypot(b[0]-a[0],b[1]-a[1]); segs.push([a,b,l]); total+=l;}
+  const pts=[]; let si=0, acc=0;
+  for(let k=0;k<NPTS;k++){ const d=k/NPTS*total;
+    while(acc+segs[si][2]<d){acc+=segs[si][2];si++;}
+    const [a,b,l]=segs[si], u=(d-acc)/l; pts.push([lerp(a[0],b[0],u),lerp(a[1],b[1],u)]); }
+  return pts;
+}
+const poly=(n,r,rot=-Math.PI/2)=>Array.from({length:n},(_,i)=>{const a=rot+i/n*Math.PI*2;return[Math.cos(a)*r,Math.sin(a)*r];});
+const SHAPES = [
+  Array.from({length:NPTS},(_,i)=>{const a=-Math.PI/2+i/NPTS*Math.PI*2;return[Math.cos(a),Math.sin(a)];}), // 丸
+  resample(poly(4,Math.SQRT2*0.86,-Math.PI/2+Math.PI/4).map(p=>p)).map(p=>p),                                  // 四角
+  resample(poly(3,1.15)),                                                                                        // 三角
+  resample(Array.from({length:10},(_,i)=>{const a=-Math.PI/2+i/10*Math.PI*2,r=i%2?0.48:1.12;return[Math.cos(a)*r,Math.sin(a)*r];})), // 星
+];
+// 四角の開始点を上に揃える（丸と同じ位置から始まるように回転）
+(function align(){ for(let s=1;s<SHAPES.length;s++){ let best=0,bd=1e9;
+  SHAPES[s].forEach((p,i)=>{const d=Math.hypot(p[0],p[1]+1);if(d<bd){bd=d;best=i;}});
+  SHAPES[s]=SHAPES[s].slice(best).concat(SHAPES[s].slice(0,best)); } })();
+
+/* ---------- 文字の形の点を約5,000個拾う ---------- */
+let TARGETS=[], SEEDS=[];
+function sampleText(){
+  const c=document.createElement('canvas'); c.width=W; c.height=H; const g=c.getContext('2d');
+  g.fillStyle='#fff'; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`360px ${DISPLAY}`; g.fillText('CLAUDE',W/2,H/2-30);
+  const d=g.getImageData(0,0,W,H).data, cand=[];
+  for(let y=0;y<H;y+=3)for(let x=0;x<W;x+=3) if(d[(y*W+x)*4+3]>128) cand.push([x,y]);
+  const r=rng(7);
+  for(let i=cand.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[cand[i],cand[j]]=[cand[j],cand[i]];}
+  TARGETS=cand.slice(0,5000);
+  SEEDS=TARGETS.map(()=>({a:r()*Math.PI*2, s:200+r()*900, d:r()*0.8, z:r()}));
+}
+
+/* ---------- フィルム粒子 ---------- */
+const grain=document.createElement('canvas'); grain.width=grain.height=512;
+(function(){const g=grain.getContext('2d'),im=g.createImageData(512,512),r=rng(3);
+  for(let i=0;i<im.data.length;i+=4){const v=r()*255;im.data[i]=im.data[i+1]=im.data[i+2]=v;im.data[i+3]=255;}
+  g.putImageData(im,0,0);})();
+
+/* =========================================================
+   シーン（t 秒 → 絵）。出来事はすべて拍の番号で書く
+   ========================================================= */
+function bg(g,col){g.fillStyle=col;g.fillRect(0,0,W,H);}
+function word(g,text,x,y,size,col,each){          // 1文字ずつ変形させて描く
+  g.font=`${size}px ${DISPLAY}`; g.textBaseline='alphabetic'; g.fillStyle=col;
+  let cx=x; [...text].forEach((ch,i)=>{const w=g.measureText(ch).width;
+    g.save(); each(g,i,cx,y,w); g.fillText(ch,0,0); g.restore(); cx+=w+size*0.02;});
+}
+const pulse = b => Math.exp(-frac(b)*6);          // 拍ごとの脈動
+
+function scene(g,t){
+  const b = t/BEAT;
+  g.save();
+
+  if(b<4){ /* 0–4拍：点が拍を刻み、線が伸びる */
+    bg(g,C.ink);
+    const w=E.expoOut(prog(b,0,4))*1500;
+    g.strokeStyle=C.paper; g.lineWidth=3; g.beginPath(); g.moveTo(W/2-w/2,H/2); g.lineTo(W/2+w/2,H/2); g.stroke();
+    for(let i=0;i<4;i++){ if(b<i)continue; const x=W/2-560+i*373;
+      g.fillStyle=C.yellow; g.beginPath(); g.arc(x,H/2,8+26*Math.exp(-(b-i)*5),0,7); g.fill(); }
+    // 3→4拍：画面を横切る「シュッ」
+    const s=prog(b,3,4); if(s>0){ g.fillStyle=C.cobalt; g.fillRect(-W+E.expoIn(s)*W*2,0,W,H); }
+  }
+  else if(b<8){ /* 4拍目：MOVE が滑り込む（expo） */
+    bg(g,C.cobalt);
+    for(let i=0;i<14;i++){ const r=rng(i+1), y=r()*H, len=300+r()*900, sp=(b*900*(0.6+r()))%(W+len);
+      g.fillStyle='rgba(242,242,238,.18)'; g.fillRect(W-sp,y,len,2+r()*3); }
+    const out = E.expoIn(prog(b,7.5,8));
+    word(g,'MOVE',230,700,440,C.paper,(g,i,x,y)=>{
+      const e=E.expoOut(prog(b,4+i*0.18,5.2+i*0.18));
+      g.translate(x+(1-e)*1500 - out*1900, y); g.transform(1,0,-0.18*(1-e),1,0,0); });
+    g.fillStyle=C.yellow; g.fillRect(230,760,E.expoOut(prog(b,5,6))*1080*(1-out),14);
+    const s=prog(b,7.5,8); if(s>0){ g.fillStyle=C.yellow; g.fillRect(0,H-E.expoIn(s)*H,W,H); }
+  }
+  else if(b<16){ /* 8–16拍：丸→四角→三角→星 ＋ SHAPE / RHYTHM */
+    bg(g,C.yellow);
+    // 変形の予定表（拍）：[開始, 終了, 形A, 形B]
+    const plan=[[10,11,0,1],[12,13,1,2],[14,15,2,3]];
+    let A=0,B=0,u=0; for(const [s,e,a,bb] of plan){ if(b>=s){A=a;B=bb;u=E.inOutCubic(prog(b,s,e));} }
+    const cx=1390, cy=540, R=250*(1+0.08*pulse(b))*E.backOut(prog(b,8,9)), rot=(b-8)*0.35;
+    g.fillStyle=C.cobalt; g.beginPath();
+    for(let i=0;i<NPTS;i++){ const p=SHAPES[A][i], q=SHAPES[B][i];
+      let x=lerp(p[0],q[0],u), y=lerp(p[1],q[1],u); const c=Math.cos(rot), s=Math.sin(rot);
+      const X=cx+(x*c-y*s)*R, Y=cy+(x*s+y*c)*R; i?g.lineTo(X,Y):g.moveTo(X,Y); }
+    g.closePath(); g.fill();
+    // 変形中は対応点の軌跡を細線で見せる
+    if(u>0&&u<1){ g.strokeStyle=C.pink; g.lineWidth=2; g.beginPath();
+      for(let i=0;i<NPTS;i+=8){const p=SHAPES[A][i],q=SHAPES[B][i],c=Math.cos(rot),s=Math.sin(rot);
+        g.moveTo(cx+(p[0]*c-p[1]*s)*R,cy+(p[0]*s+p[1]*c)*R); g.lineTo(cx+(q[0]*c-q[1]*s)*R,cy+(q[0]*s+q[1]*c)*R);} g.stroke(); }
+
+    if(b<12){ // SHAPE：少し行き過ぎて戻る（back）
+      const exit=E.expoIn(prog(b,11.6,12));
+      word(g,'SHAPE',150,660,300,C.ink,(g,i,x,y,w)=>{
+        const e=E.backOut(prog(b,8.25+i*0.2,9+i*0.2))*(1-exit);
+        g.translate(x+w/2,y-110); g.scale(e,e); g.translate(-w/2,110); });
+    } else {  // RHYTHM：落ちて弾む（bounce）
+      word(g,'RHYTHM',150,660,260,C.ink,(g,i,x,y)=>{
+        const e=E.bounceOut(prog(b,12+i*0.25,13.2+i*0.25));
+        g.translate(x, lerp(-400,y,e)); });
+      g.fillStyle=C.pink; for(let i=0;i<4;i++){ const on=Math.floor(b)%4===i;
+        g.fillRect(150+i*95,720,70,on?70:18); }
+    }
+  }
+  else if(b<20){ /* 16–20拍：グラフエディタ（緩急の曲線そのもの） */
+    bg(g,'#101018');
+    const curves=[['expo.out',E.expoOut,C.yellow],['back.out',E.backOut,C.pink],['bounce.out',E.bounceOut,'#6FA8FF']];
+    g.strokeStyle='rgba(255,255,255,.07)'; g.lineWidth=1;
+    for(let x=0;x<W;x+=60){g.beginPath();g.moveTo(x,0);g.lineTo(x,H);g.stroke();}
+    for(let y=0;y<H;y+=60){g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke();}
+    curves.forEach(([name,f,col],k)=>{
+      const x0=150+k*570, y0=800, pw=480, ph=480, d=E.expoOut(prog(b,16+k*0.5,17.2+k*0.5));
+      if(d<=0)return;
+      g.strokeStyle='rgba(255,255,255,.35)'; g.lineWidth=2; g.strokeRect(x0,y0-ph,pw,ph);
+      g.strokeStyle=col; g.lineWidth=6; g.beginPath();
+      for(let i=0;i<=200*d;i++){const u=i/200,X=x0+u*pw,Y=y0-f(u)*ph; i?g.lineTo(X,Y):g.moveTo(X,Y);} g.stroke();
+      g.fillStyle=C.paper; g.font=`30px ${MONO}`; g.fillText(name,x0,y0+56);
+      if(d>=0.99){ const u=frac(b), v=f(u);                      // 再生ヘッドと、その値で動く四角
+        g.strokeStyle='rgba(255,255,255,.5)'; g.lineWidth=2; g.beginPath(); g.moveTo(x0+u*pw,y0-ph); g.lineTo(x0+u*pw,y0); g.stroke();
+        g.fillStyle=col; g.beginPath(); g.arc(x0+u*pw,y0-v*ph,13,0,7); g.fill();
+        g.fillRect(x0+v*(pw-60),y0+90,60,60); }
+    });
+  }
+  else if(b<24){ /* 20–24拍：トンネル（遠近法を自前で） */
+    bg(g,C.ink);
+    const N=26, sp=2.2+ (b-20)*0.9, f=520;
+    for(let k=N-1;k>=0;k--){
+      const z=((k - t*sp*4)%N+N)%N + 0.35, s=f/(z*60);
+      const sw=W*s*0.9, sh=H*s*0.9, rot=z*0.06+t*0.25;
+      g.save(); g.translate(W/2+Math.sin(t*1.3)*80*s, H/2+Math.cos(t*1.1)*50*s); g.rotate(rot);
+      g.strokeStyle=k%3===0?C.pink:(k%3===1?C.cobalt:C.paper);
+      g.globalAlpha=clamp(1.4-z/N*1.6); g.lineWidth=Math.max(1,8*s)*(1+pulse(b));
+      g.strokeRect(-sw/2,-sh/2,sw,sh); g.restore();
+    }
+    g.globalAlpha=1; const e=E.expoOut(prog(b,20,21));
+    g.fillStyle=C.paper; g.font=`${150*e}px ${DISPLAY}`; g.textAlign='center'; g.fillText('DEPTH',W/2,H/2+50);
+    g.textAlign='left';
+  }
+  else if(b<27.75){ /* 24–27.75拍：ワイヤーの立方体 */
+    bg(g,C.cobalt);
+    const V=[]; for(let i=0;i<8;i++)V.push([i&1?1:-1,i&2?1:-1,i&4?1:-1]);
+    const Ed=[[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
+    const proj=(p,sz,ax,ay)=>{let [x,y,z]=p.map(v=>v*sz);
+      let c=Math.cos(ay),s=Math.sin(ay); [x,z]=[x*c+z*s,-x*s+z*c];
+      c=Math.cos(ax); s=Math.sin(ax); [y,z]=[y*c-z*s,y*s+z*c];
+      const k=900/(900+z+600); return [W/2+x*k*1.6,H/2+y*k*1.6];};
+    [[260,C.paper,5],[130,C.yellow,4]].forEach(([sz,col,lw],n)=>{
+      const ax=t*(n?-1.3:0.9)+pulse(b)*0.15, ay=t*(n?1.7:1.1);
+      g.strokeStyle=col; g.lineWidth=lw; g.beginPath();
+      Ed.forEach(([a,c])=>{const A=proj(V[a],sz*(1+0.1*pulse(b)),ax,ay),B=proj(V[c],sz*(1+0.1*pulse(b)),ax,ay);g.moveTo(...A);g.lineTo(...B);});
+      g.stroke(); });
+  }
+  else if(b<28){ /* 27.75–28拍：無音と同期した完全な黒 */
+    bg(g,'#000');
+  }
+  else { /* 28拍目：爆発 → 粒子が CLAUDE に集まる */
+    bg(g,C.ink);
+    g.fillStyle=C.paper;
+    const ex=E.expoOut(prog(b,28,29.2));
+    for(let i=0;i<TARGETS.length;i++){
+      const S=SEEDS[i], T=TARGETS[i];
+      const px=W/2+Math.cos(S.a)*S.s*ex, py=H/2+Math.sin(S.a)*S.s*ex*0.7;
+      const e=E.inOutCubic(prog(b,29+S.d,30.6+S.d));
+      const x=lerp(px,T[0],e)+Math.sin(t*3+i)*(1-e)*6, y=lerp(py,T[1],e);
+      g.fillStyle = S.z<0.12?C.pink:(S.z<0.24?C.yellow:C.paper);
+      g.fillRect(x,y,2.6,2.6);
+    }
+    const f=prog(b,31,31.6);
+    g.globalAlpha=f; g.fillStyle=C.yellow; g.font=`46px ${MONO}`; g.textAlign='center';
+    g.fillText('Opus 5.5 / motion study', W/2, H/2+230); g.textAlign='left'; g.globalAlpha=1;
+    const fl=Math.exp(-(b-28)*6); g.fillStyle=`rgba(255,255,255,${fl})`; g.fillRect(0,0,W,H);   // 閃光
+  }
+  g.restore();
+}
+
+/* ---------- 仕上げ：グリッチ・粒子・周辺減光・HUD ---------- */
+function glitchAmount(b){
+  let a=0;
+  for(const k of [4,8,12,16,20,24]) if(b>=k&&b<k+0.15) a=Math.max(a,0.35*(1-(b-k)/0.15));
+  if(b>=26&&b<27.75) a=Math.max(a, Math.pow(prog(b,26,27.75),2));
+  if(b>=28&&b<28.4) a=Math.max(a,0.9*(1-(b-28)/0.4));
+  return b>=27.75&&b<28?0:a;
+}
+function glitch(ctx,amt,seed){
+  if(amt<=0.001)return; const r=rng(seed), w=ctx.canvas.width, h=ctx.canvas.height;
+  const im=ctx.getImageData(0,0,w,h), s=im.data, d=new Uint8ClampedArray(s);
+  const dx=Math.round(amt*28*SCALE);
+  for(let y=0;y<h;y++){ const row=y*w;
+    for(let x=0;x<w;x++){ const i=(row+x)*4;
+      d[i]  =s[(row+Math.min(w-1,x+dx))*4];       // 赤は右へ
+      d[i+2]=s[(row+Math.max(0,x-dx))*4+2]; } }   // 青は左へ
+  im.data.set(d); ctx.putImageData(im,0,0);
+  tctx.clearRect(0,0,w,h); tctx.drawImage(ctx.canvas,0,0);
+  const n=Math.floor(3+amt*10);
+  for(let i=0;i<n;i++){ const y=r()*h, hh=(4+r()*60)*SCALE, off=(r()-.5)*amt*260*SCALE;
+    ctx.drawImage(tmp,0,y,w,hh,off,y,w,hh); }
+}
+function finish(ctx,t,frame){
+  const b=t/BEAT; ctx.save(); ctx.setTransform(SCALE,0,0,SCALE,0,0);
+  // 周辺の暗さ
+  const v=ctx.createRadialGradient(W/2,H/2,H*0.35,W/2,H/2,H*0.95);
+  v.addColorStop(0,'rgba(0,0,0,0)'); v.addColorStop(1,'rgba(0,0,0,.45)');
+  ctx.fillStyle=v; ctx.fillRect(0,0,W,H);
+  // フィルム粒子（毎コマ違う位置）
+  const r=rng(frame*977+1); ctx.globalAlpha=0.07; ctx.globalCompositeOperation='overlay';
+  const ox=-r()*512, oy=-r()*512;
+  for(let x=ox;x<W;x+=512)for(let y=oy;y<H;y+=512)ctx.drawImage(grain,x,y);
+  // HUD：差の絶対値（difference）で重ねる → どの背景でもほぼ読める
+  ctx.globalAlpha=1; ctx.globalCompositeOperation='difference';
+  ctx.fillStyle='#fff'; ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.font=`22px ${MONO}`;
+  const f=Math.min(frame,FRAMES-1), ss=Math.floor(f/FPS), ff=f%FPS;
+  const tc=`00:00:${String(ss).padStart(2,'0')}:${String(ff).padStart(2,'0')}`;
+  ctx.fillText('AICU motion study',60,70);
+  ctx.textAlign='right'; ctx.fillText(tc,W-60,70);
+  ctx.fillText('Claude Opus 5.5',W-60,H-50); ctx.textAlign='left';
+  ctx.fillText(`${BPM} BPM  beat ${String(Math.floor(b)+1).padStart(2,'0')}/${BEATS}`,60,H-50);
+  const L=28; [[40,40,1,1],[W-40,40,-1,1],[40,H-40,1,-1],[W-40,H-40,-1,-1]].forEach(([x,y,sx,sy])=>{
+    ctx.beginPath(); ctx.moveTo(x+sx*L,y); ctx.lineTo(x,y); ctx.lineTo(x,y+sy*L); ctx.stroke();});
+  ctx.fillRect(60,H-30,(W-120)*clamp(t/DUR),3);
+  ctx.restore();
+}
+
+/* ---------- 1コマ描く（モーションブラー込み） ---------- */
+function drawFrame(frame){
+  actx.setTransform(1,0,0,1,0,0); actx.globalAlpha=1; actx.clearRect(0,0,acc.width,acc.height);
+  for(let i=0;i<SUB;i++){
+    const t=clamp((frame+((i+0.5)/SUB-0.5)*SHUTTER)/FPS,0,DUR-1e-6);
+    bctx.setTransform(SCALE,0,0,SCALE,0,0); scene(bctx,t);
+    actx.globalAlpha=1/(i+1); actx.drawImage(buf,0,0);        // 逐次平均
+  }
+  octx.setTransform(1,0,0,1,0,0); octx.globalAlpha=1; octx.globalCompositeOperation='source-over';
+  octx.drawImage(acc,0,0);
+  const t=frame/FPS;
+  glitch(octx,glitchAmount(t/BEAT),frame+11);
+  finish(octx,t,frame);
+}
+
+// render.py から呼ぶ入口
+window.FRAMES=FRAMES;
+window.renderFrame=function(frame){ drawFrame(frame); return out.toDataURL('image/png'); };
+
+(async function boot(){
+  try{ await document.fonts.load(`100px Anton`); await document.fonts.load(`20px "JetBrains Mono"`); }catch(e){}
+  await document.fonts.ready; sampleText(); window.ready=true;
+  if(RENDER) return;
+  // プレビュー：クリックで音声と同期再生、それ以外はループ
+  const au=document.getElementById('au'); let t0=performance.now(), useAudio=false;
+  document.body.addEventListener('click',()=>{au.currentTime=0; au.play().then(()=>{useAudio=true;}).catch(()=>{}); t0=performance.now();
+    document.getElementById('hint').style.display='none';});
+  (function loop(){ let t=useAudio?au.currentTime:((performance.now()-t0)/1000)%DUR;
+    if(useAudio&&au.ended){useAudio=false;t0=performance.now();}
+    drawFrame(Math.min(FRAMES-1,Math.floor(t*FPS))); requestAnimationFrame(loop); })();
+})();
+</script>
+</body>
+</html>

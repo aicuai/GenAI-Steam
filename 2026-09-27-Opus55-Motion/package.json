@@ -1,0 +1,14 @@
+{
+  "name": "aicu-media-demo-opus55-motion",
+  "private": true,
+  "scripts": {
+    "sync": "python3 scripts/sync.py",
+    "check": "python3 scripts/check.py",
+    "dev": "npm run sync && npm run check && wrangler dev",
+    "build:dry-run": "npm run sync && npm run check && wrangler deploy --dry-run",
+    "e2e": "python3 scripts/e2e.py"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}
