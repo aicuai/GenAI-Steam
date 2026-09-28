@@ -12,3 +12,4 @@ experiments/**/*.mp4
 experiments/**/*.png
 experiments/**/*.json
 !experiments/**/grid_*.json
+!experiments/**/videos/*.mp4
